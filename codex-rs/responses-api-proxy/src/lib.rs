@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::fs::{self};
+use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -7,20 +8,13 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use clap::Parser;
-use reqwest::Url;
-use reqwest::blocking::Client;
-use reqwest::header::AUTHORIZATION;
-use reqwest::header::HOST;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use serde::Serialize;
+use serde_json::Value;
 use tiny_http::Header;
 use tiny_http::Method;
 use tiny_http::Request;
@@ -28,10 +22,18 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 
+mod app_server_reader;
 mod dump;
-mod read_api_key;
+mod identity;
+mod models;
+mod rewrite;
+mod session_pool;
+use app_server_reader::AppServerIdentityClient;
+use app_server_reader::resolve_socket_arg;
 use dump::ExchangeDumper;
-use read_api_key::read_auth_header_from_stdin;
+use identity::SessionIdentity;
+use rewrite::rewrite_body;
+use session_pool::SessionPool;
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
@@ -49,13 +51,13 @@ pub struct Args {
     #[arg(long)]
     pub http_shutdown: bool,
 
-    /// Absolute URL the proxy should forward requests to (defaults to OpenAI).
-    #[arg(long, default_value = "https://api.openai.com/v1/responses")]
-    pub upstream_url: String,
-
     /// Directory where request/response dumps should be written as JSON.
     #[arg(long, value_name = "DIR")]
     pub dump_dir: Option<PathBuf>,
+
+    /// Absolute path to the local app-server control socket.
+    #[arg(long, value_name = "PATH")]
+    pub app_server_socket: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -65,27 +67,23 @@ struct ServerInfo {
 }
 
 struct ForwardConfig {
-    upstream_url: Url,
-    host_header: HeaderValue,
+    identity_client: Arc<AppServerIdentityClient>,
 }
 
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
-    let auth_header = read_auth_header_from_stdin()?;
+    let app_server_socket = resolve_socket_arg(args.app_server_socket.clone())?;
+    let (identity_client, identities) = AppServerIdentityClient::start(app_server_socket.clone())
+        .with_context(|| {
+        format!(
+            "failed to create proxy sessions through {}",
+            app_server_socket.display()
+        )
+    })?;
+    let session_pool = Arc::new(SessionPool::new(identities)?);
+    let identity_client = Arc::new(identity_client);
 
-    let upstream_url = Url::parse(&args.upstream_url).context("parsing --upstream-url")?;
-    let host = match (upstream_url.host_str(), upstream_url.port()) {
-        (Some(host), Some(port)) => format!("{host}:{port}"),
-        (Some(host), None) => host.to_string(),
-        _ => return Err(anyhow!("upstream URL must include a host")),
-    };
-    let host_header =
-        HeaderValue::from_str(&host).context("constructing Host header from upstream URL")?;
-
-    let forward_config = Arc::new(ForwardConfig {
-        upstream_url,
-        host_header,
-    });
+    let forward_config = Arc::new(ForwardConfig { identity_client });
     let dump_dir = args
         .dump_dir
         .map(ExchangeDumper::new)
@@ -99,34 +97,22 @@ pub fn run_main(args: Args) -> Result<()> {
     }
     let server = Server::from_listener(listener, None)
         .map_err(|err| anyhow!("creating HTTP server: {err}"))?;
-    let client = Arc::new(
-        Client::builder()
-            // Disable reqwest's 30s default so long-lived response streams keep flowing.
-            .timeout(None::<Duration>)
-            .build()
-            .context("building reqwest client")?,
-    );
-
     eprintln!("responses-api-proxy listening on {bound_addr}");
 
     let http_shutdown = args.http_shutdown;
     for request in server.incoming_requests() {
-        let client = client.clone();
         let forward_config = forward_config.clone();
         let dump_dir = dump_dir.clone();
+        let session_pool = session_pool.clone();
         std::thread::spawn(move || {
             if http_shutdown && request.method() == &Method::Get && request.url() == "/shutdown" {
                 let _ = request.respond(Response::new_empty(StatusCode(200)));
                 std::process::exit(0);
             }
 
-            if let Err(e) = forward_request(
-                &client,
-                auth_header,
-                &forward_config,
-                dump_dir.as_deref(),
-                request,
-            ) {
+            if let Err(e) =
+                forward_request(&forward_config, dump_dir.as_deref(), &session_pool, request)
+            {
                 eprintln!("forwarding error: {e}");
             }
         });
@@ -161,28 +147,63 @@ fn write_server_info(path: &Path, port: u16) -> Result<()> {
 }
 
 fn forward_request(
-    client: &Client,
-    auth_header: &'static str,
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
-    mut req: Request,
+    session_pool: &SessionPool,
+    req: Request,
 ) -> Result<()> {
-    // Only allow POST /v1/responses exactly, no query string.
     let method = req.method().clone();
-    let url_path = req.url().to_string();
-    let allow = method == Method::Post && url_path == "/v1/responses";
-
-    if !allow {
-        let resp = Response::new_empty(StatusCode(403));
-        let _ = req.respond(resp);
+    let url = req.url();
+    let url_path = url.split_once('?').map_or(url, |(path, _)| path);
+    let owned_url_path;
+    let url_path = if url_path == url {
+        owned_url_path = url.to_string();
+        owned_url_path.as_str()
+    } else {
+        url_path
+    };
+    if method == Method::Get && (url_path == "/v1/models" || url_path.starts_with("/v1/models/")) {
+        return config.identity_client.respond_models(req);
+    }
+    if method != Method::Post || url_path != "/v1/responses" {
+        let _ = req.respond(Response::new_empty(StatusCode(403)));
         return Ok(());
     }
 
-    // Read request body
-    let mut body = Vec::new();
-    let reader = req.as_reader();
-    reader.read_to_end(&mut body)?;
+    let identity = session_pool.acquire();
+    let result = forward_request_with_identity(config, dump_dir, &identity, req);
+    session_pool.release(identity);
+    result
+}
 
+fn forward_request_with_identity(
+    config: &ForwardConfig,
+    dump_dir: Option<&ExchangeDumper>,
+    identity: &SessionIdentity,
+    mut req: Request,
+) -> Result<()> {
+    let effective_identity = match config.identity_client.read_identity(&identity.thread_id) {
+        Ok(Some(identity)) => identity,
+        Ok(None) => {
+            req.respond(Response::new_empty(StatusCode(503)))?;
+            anyhow::bail!("assigned app-server thread is no longer loaded");
+        }
+        Err(error) => {
+            req.respond(Response::new_empty(StatusCode(503)))?;
+            return Err(error.context("refreshing assigned app-server thread identity"));
+        }
+    };
+    let method = req.method().clone();
+    let url_path = req.url().to_string();
+    let mut body = Vec::new();
+    req.as_reader().read_to_end(&mut body)?;
+    let rewritten = match rewrite_body(&body, &effective_identity) {
+        Ok(rewritten) => rewritten,
+        Err(error) => {
+            req.respond(Response::new_empty(StatusCode(400)))?;
+            return Err(error.context("rewriting request identity metadata"));
+        }
+    };
     let exchange_dump = dump_dir.and_then(|dump_dir| {
         dump_dir
             .dump_request(&method, &url_path, req.headers(), &body)
@@ -192,84 +213,69 @@ fn forward_request(
             })
             .ok()
     });
-
-    // Build headers for upstream, forwarding everything from the incoming
-    // request except Authorization (we replace it below).
-    let mut headers = HeaderMap::new();
+    let request_value: Value = serde_json::from_slice(&rewritten.body)?;
+    let mut headers = std::collections::HashMap::new();
     for header in req.headers() {
-        let name_ascii = header.field.as_str();
-        let lower = name_ascii.to_ascii_lowercase();
-        if lower.as_str() == "authorization" || lower.as_str() == "host" {
-            continue;
-        }
-
-        let header_name = match HeaderName::from_bytes(lower.as_bytes()) {
-            Ok(name) => name,
-            Err(_) => continue,
-        };
-        if let Ok(value) = HeaderValue::from_bytes(header.value.as_bytes()) {
-            headers.append(header_name, value);
-        }
-    }
-
-    // As part of our effort to to keep `auth_header` secret, we use a
-    // combination of `from_static()` and `set_sensitive(true)`.
-    let mut auth_header_value = HeaderValue::from_static(auth_header);
-    auth_header_value.set_sensitive(true);
-    headers.insert(AUTHORIZATION, auth_header_value);
-
-    headers.insert(HOST, config.host_header.clone());
-
-    let upstream_resp = client
-        .post(config.upstream_url.clone())
-        .headers(headers)
-        .body(body)
-        .send()
-        .context("forwarding request to upstream")?;
-
-    // We have to create an adapter between a `reqwest::blocking::Response`
-    // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
-    // implements `Read`, so we can use it directly as the body of the
-    // `tiny_http::Response`.
-    let status = upstream_resp.status();
-    let mut response_headers = Vec::new();
-    for (name, value) in upstream_resp.headers().iter() {
-        // Skip headers that tiny_http manages itself.
+        let name = header.field.as_str().to_ascii_lowercase().to_string();
         if matches!(
             name.as_str(),
-            "content-length" | "transfer-encoding" | "connection" | "trailer" | "upgrade"
-        ) {
-            continue;
-        }
-
-        if let Ok(header) = Header::from_bytes(name.as_str().as_bytes(), value.as_bytes()) {
-            response_headers.push(header);
+            "x-codex-turn-state" | "x-codex-inference-call-id" | "traceparent" | "tracestate"
+        ) && (header.value.len() > 8192
+            || headers.insert(name, header.value.to_string()).is_some())
+        {
+            req.respond(Response::new_empty(StatusCode(400)))?;
+            anyhow::bail!("oversized or duplicate routing/tracing header");
         }
     }
-
-    let content_length = upstream_resp.content_length().and_then(|len| {
-        if len <= usize::MAX as u64 {
-            Some(len as usize)
-        } else {
-            None
+    let result = match config.identity_client.run_raw_response(
+        &effective_identity.thread_id,
+        request_value,
+        headers,
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            req.respond(Response::new_empty(StatusCode(502)))?;
+            return Err(error.context("calling app-server raw Responses"));
         }
-    });
-
-    let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
-        let headers = upstream_resp.headers().clone();
-        Box::new(exchange_dump.tee_response_body(status.as_u16(), &headers, upstream_resp))
-    } else {
-        Box::new(upstream_resp)
     };
-
+    let status_code = result.status;
+    let status = StatusCode(status_code);
+    let content_type = if body_contains_stream(&rewritten.body) {
+        "text/event-stream"
+    } else {
+        "application/json"
+    };
+    let mut response_headers = vec![
+        Header::from_bytes(b"content-type", content_type.as_bytes())
+            .map_err(|_| anyhow!("invalid content-type header"))?,
+    ];
+    if let Some(state) = result.headers.get("x-codex-turn-state") {
+        response_headers.push(
+            Header::from_bytes(b"x-codex-turn-state", state.as_bytes())
+                .map_err(|_| anyhow!("invalid upstream routing header"))?,
+        );
+    }
+    let response_body = Cursor::new(result.body.into_bytes());
+    let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
+        let headers = reqwest::header::HeaderMap::new();
+        Box::new(exchange_dump.tee_response_body(status_code, &headers, response_body))
+    } else {
+        Box::new(response_body)
+    };
     let response = Response::new(
-        StatusCode(status.as_u16()),
-        response_headers,
+        status,
+        std::mem::take(&mut response_headers),
         response_body,
-        content_length,
+        None,
         None,
     );
-
-    let _ = req.respond(response);
+    req.respond(response)?;
     Ok(())
+}
+
+fn body_contains_stream(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| value.get("stream").and_then(Value::as_bool))
+        .unwrap_or(false)
 }

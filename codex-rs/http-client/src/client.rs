@@ -111,7 +111,15 @@ impl HttpClient {
         &self,
         mut request: reqwest::Request,
     ) -> Result<reqwest::Response, reqwest::Error> {
-        request.headers_mut().extend(trace_headers());
+        // Explicit adapter trace headers belong to the caller's trace, not this span.
+        let mut headers = trace_headers();
+        if request.headers().contains_key("traceparent")
+            || request.headers().contains_key("tracestate")
+        {
+            headers.remove("traceparent");
+            headers.remove("tracestate");
+        }
+        request.headers_mut().extend(headers);
         self.inner.execute(request).await
     }
 
@@ -343,6 +351,80 @@ mod tests {
     }
 
     struct HeaderMapExtractor<'a>(&'a HeaderMap);
+
+    #[tokio::test]
+    async fn execute_preserves_explicit_trace_headers_and_injects_when_absent() {
+        use std::io::Read;
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let provider = SdkTracerProvider::builder().build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("request-test")));
+        let _guard = subscriber.set_default();
+        let span = trace_span!("outbound_request");
+        let _entered = span.enter();
+        let injected = trace_headers();
+        assert!(injected.contains_key("traceparent"));
+
+        for supplied in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut received = Vec::new();
+                let mut buffer = [0; 1024];
+                while !received.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let size = stream.read(&mut buffer).unwrap();
+                    assert_ne!(size, 0);
+                    received.extend_from_slice(&buffer[..size]);
+                }
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .unwrap();
+                String::from_utf8(received).unwrap()
+            });
+            let inner = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap();
+            let mut request = inner.get(format!("http://{address}/")).build().unwrap();
+            let expected = if supplied {
+                let headers = HeaderMap::from_iter([
+                    (
+                        HeaderName::from_static("traceparent"),
+                        HeaderValue::from_static(
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                        ),
+                    ),
+                    (
+                        HeaderName::from_static("tracestate"),
+                        HeaderValue::from_static("vendor=value"),
+                    ),
+                ]);
+                request.headers_mut().extend(headers.clone());
+                headers
+            } else {
+                injected.clone()
+            };
+            HttpClient::new(inner)
+                .execute_without_request_logging(request)
+                .await
+                .unwrap();
+            let received = server.join().unwrap();
+            for (name, value) in &expected {
+                assert!(
+                    received.contains(&format!("{name}: {}\r\n", value.to_str().unwrap())),
+                    "{received}"
+                );
+            }
+        }
+    }
 
     impl<'a> Extractor for HeaderMapExtractor<'a> {
         fn get(&self, key: &str) -> Option<&str> {

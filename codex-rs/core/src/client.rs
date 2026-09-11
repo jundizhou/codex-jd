@@ -102,6 +102,7 @@ use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode;
+use serde_json::Value;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -1138,6 +1139,38 @@ impl ModelClient {
 
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
         self.current_client_setup().await.map(|_| ())
+    }
+
+    /// Sends a trusted opaque Responses request through Codex's provider and authentication
+    /// transport without rebuilding its JSON body.
+    ///
+    /// Callers must have already applied the allowed identity rewrite to `body`. This method
+    /// owns endpoint selection, OAuth authentication, provider headers, and the HTTP transport.
+    pub async fn stream_raw_responses(
+        &self,
+        body: Value,
+        model: &str,
+        session_id: Option<String>,
+        thread_id: Option<String>,
+        mut extra_headers: ApiHeaderMap,
+    ) -> Result<codex_client::StreamResponse> {
+        let client_setup = self.current_client_setup().await?;
+        let endpoint = self.responses_endpoint(client_setup.auth.as_ref(), model);
+        let transport = self.build_api_transport(&client_setup.api_provider, endpoint.path())?;
+        if let Some(session_id) = session_id {
+            extra_headers.extend(build_session_headers(Some(session_id), thread_id.clone()));
+        }
+        if let Some(thread_id) = thread_id {
+            if let Ok(value) = HeaderValue::from_str(&thread_id) {
+                extra_headers.insert("x-client-request-id", value);
+            }
+        }
+        add_originator_header(&mut extra_headers, self.state.originator.as_str());
+        ApiResponsesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+            .with_endpoint(endpoint)
+            .stream_raw(body, extra_headers, Compression::None)
+            .await
+            .map_err(|error| self.state.provider.map_api_error(error))
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.

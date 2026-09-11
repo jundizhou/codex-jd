@@ -26,7 +26,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum TurnStatus {
@@ -260,13 +260,34 @@ pub struct TurnStartParams {
     #[experimental("turn/start.cyberAccessProgram")]
     #[ts(optional = nullable)]
     pub cyber_access_program: Option<CyberAccessProgram>,
+
+    /// Internal app-server adapter input. When present, the request is sent through Codex's
+    /// authenticated raw Responses transport without rebuilding the JSON body from `input`.
+    #[experimental("turn/start.rawResponses")]
+    #[ts(optional = nullable)]
+    pub raw_responses: Option<JsonValue>,
+    /// Allowlisted routing and tracing headers for the raw Responses adapter.
+    #[experimental("turn/start.rawResponses")]
+    #[ts(optional = nullable)]
+    pub raw_responses_headers: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartResponse {
     pub turn: Turn,
+    /// Raw upstream response body returned by the internal Responses adapter.
+    #[experimental("turn/start.rawResponses")]
+    #[ts(optional = nullable)]
+    pub raw_response_body: Option<String>,
+    /// HTTP status returned by the internal Responses adapter.
+    #[experimental("turn/start.rawResponses")]
+    #[ts(optional = nullable)]
+    pub raw_response_status: Option<u16>,
+    /// Allowlisted upstream routing headers, without authentication or cookies.
+    #[experimental("turn/start.rawResponses")]
+    pub raw_response_headers: Option<HashMap<String, String>>,
 }
 
 #[derive(

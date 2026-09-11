@@ -1,0 +1,20 @@
+services:
+  api:
+    image: codex-migration:2026-09-10
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-18876}:8080"
+    volumes:
+      - codex-data:/data
+    environment:
+      HTTP_PROXY: ${OUTBOUND_PROXY:-}
+      HTTPS_PROXY: ${OUTBOUND_PROXY:-}
+      ALL_PROXY: ${OUTBOUND_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1
+      RUST_LOG: ${RUST_LOG:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stop_grace_period: 30s
+volumes:
+  codex-data:

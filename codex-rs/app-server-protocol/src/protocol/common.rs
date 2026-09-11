@@ -783,6 +783,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadLoadedListResponse,
     },
+    #[experimental("thread/modelIdentity/list")]
+    ThreadModelIdentityList => "thread/modelIdentity/list" {
+        params: v2::ThreadModelIdentityListParams,
+        serialization: None,
+        response: v2::ThreadModelIdentityListResponse,
+    },
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         serialization: thread_id(params.thread_id),

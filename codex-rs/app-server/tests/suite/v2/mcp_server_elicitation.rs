@@ -438,7 +438,7 @@ async fn openai_form_capability_follows_the_turn_starting_connection() -> Result
         })?),
     )
     .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         to_response(read_response_for_id(&mut supported_client, /*id*/ 6).await?)?;
 
     let (request_id, params) = loop {
@@ -788,7 +788,7 @@ impl ElicitationRoundTripFixture {
             mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
         )
         .await??;
-        let TurnStartResponse { turn } = to_response(turn_start_resp)?;
+        let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;
 
         Ok(Self {
             mcp,

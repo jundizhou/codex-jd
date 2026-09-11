@@ -499,6 +499,7 @@ export type { ThreadLoadedListResponse } from "./ThreadLoadedListResponse";
 export type { ThreadMetadataGitInfoUpdateParams } from "./ThreadMetadataGitInfoUpdateParams";
 export type { ThreadMetadataUpdateParams } from "./ThreadMetadataUpdateParams";
 export type { ThreadMetadataUpdateResponse } from "./ThreadMetadataUpdateResponse";
+export type { ThreadModelIdentity } from "./ThreadModelIdentity";
 export type { ThreadNameUpdatedNotification } from "./ThreadNameUpdatedNotification";
 export type { ThreadProjectUpdatedNotification } from "./ThreadProjectUpdatedNotification";
 export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";

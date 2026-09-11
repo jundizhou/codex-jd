@@ -3,11 +3,13 @@ use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
 use crate::elicitation::ElicitationRegistration;
+use crate::model_request_identity::ModelRequestIdentity;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::new_submission_id;
 use crate::session::session::Session;
 use crate::session::step_settings::StepSettingsUpdate;
+use codex_client::StreamResponse;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
@@ -66,7 +68,9 @@ use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use http::HeaderMap;
 use rmcp::model::ReadResourceRequestParams;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -658,6 +662,30 @@ impl CodexThread {
 
     pub fn session_configured(&self) -> SessionConfiguredEvent {
         self.session_configured.clone()
+    }
+
+    /// Returns the identity fields currently generated for this thread's model requests.
+    pub async fn model_request_identity(&self) -> ModelRequestIdentity {
+        self.session.model_request_identity().await
+    }
+
+    /// Sends an opaque Responses request through this thread's Codex-authenticated provider.
+    ///
+    /// The caller is responsible for applying the proxy's bounded identity rewrite before
+    /// invoking this method. The request body is not rebuilt from a prompt.
+    pub async fn stream_raw_responses(
+        &self,
+        body: Value,
+        model: &str,
+        session_id: Option<String>,
+        thread_id: Option<String>,
+        extra_headers: HeaderMap,
+    ) -> CodexResult<StreamResponse> {
+        self.session
+            .services
+            .model_client
+            .stream_raw_responses(body, model, session_id, thread_id, extra_headers)
+            .await
     }
 
     pub(crate) fn is_running(&self) -> bool {

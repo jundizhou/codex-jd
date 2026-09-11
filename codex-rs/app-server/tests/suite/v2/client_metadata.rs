@@ -94,7 +94,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     timeout(
@@ -179,7 +179,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     timeout(
@@ -373,7 +373,7 @@ async fn turn_start_sends_nested_subagent_lineage_after_cold_thread_resume_v2() 
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     timeout(
@@ -486,7 +486,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
     let turn_id = turn.id.clone();
 
@@ -619,7 +619,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     timeout(

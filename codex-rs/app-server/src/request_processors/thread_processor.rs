@@ -850,6 +850,43 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_model_identity_list(
+        &self,
+        params: ThreadModelIdentityListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let ThreadModelIdentityListParams { cursor, limit } = params;
+        let ThreadLoadedListResponse {
+            data: thread_ids,
+            next_cursor,
+        } = self
+            .thread_loaded_list_response_inner(ThreadLoadedListParams { cursor, limit })
+            .await?;
+        let mut data = Vec::with_capacity(thread_ids.len());
+        for thread_id in thread_ids {
+            let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
+                continue;
+            };
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                continue;
+            };
+            let identity = thread.model_request_identity().await;
+            data.push(ThreadModelIdentity {
+                thread_id: identity.thread_id,
+                session_id: identity.session_id,
+                installation_id: identity.installation_id,
+                window_id: identity.window_id,
+                parent_thread_id: identity.parent_thread_id,
+                turn_id: identity.turn_id,
+                root_turn_id: identity.root_turn_id,
+                parent_turn_id: identity.parent_turn_id,
+            });
+        }
+        data.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+        Ok(Some(
+            ThreadModelIdentityListResponse { data, next_cursor }.into(),
+        ))
+    }
+
     pub(crate) async fn thread_read(
         &self,
         request_id: &ConnectionRequestId,

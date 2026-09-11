@@ -81,7 +81,7 @@ async fn clock_tools_emit_control_tool_analytics() -> Result<()> {
         .start_thread(ThreadStartParams::default())
         .await?
         .thread;
-    let TurnStartResponse { turn } = app_server
+    let TurnStartResponse { turn, .. } = app_server
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

@@ -1049,7 +1049,7 @@ impl TestAppServer {
         let response = self
             .read_stream_until_response_message(RequestId::Integer(request_id))
             .await?;
-        let TurnStartResponse { turn } = crate::to_response(response)?;
+        let TurnStartResponse { turn, .. } = crate::to_response(response)?;
         let notification = self
             .read_stream_until_matching_notification(
                 "turn/completed for started turn",

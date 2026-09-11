@@ -183,6 +183,7 @@ Example with notification opt-out:
 - `threadSection/update` — rename an existing custom section and optionally replace its `appearance`; omit appearance to preserve it or pass `null` to clear it. The built-in pinned section cannot be updated.
 - `threadSection/delete` — delete an existing custom section and atomically return its member threads to the unsectioned list; returns `{}`. The built-in pinned section cannot be deleted.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
+- `thread/modelIdentity/list` — experimental; list model-request identity snapshots for threads currently loaded in memory. This local control API exposes installation, session, thread, context-window, and active or most recently persisted turn lineage fields for infrastructure such as `codex-responses-api-proxy`.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded. For loaded threads, experimental clients can use `canAcceptDirectInput` to determine whether `turn/start` and `turn/steer` are accepted (`false` for parent-owned Multi-Agent V2 subagents); unloaded stored threads report `null` when that capability is unavailable.
 - `thread/turns/list` — page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
 - `thread/items/list` — page through persisted thread items without resuming the thread. Pass `turnId` to restrict results to one turn, or omit it to page items across the thread. The active thread store must support item pagination.
@@ -588,6 +589,40 @@ Enable `capabilities.experimentalApi` during initialization, then use `thread/li
 { "method": "thread/loaded/list", "id": 21 }
 { "id": 21, "result": {
     "data": ["thr_123", "thr_456"]
+} }
+```
+
+### Example: List loaded model identities
+
+Enable `capabilities.experimentalApi` during initialization. `thread/modelIdentity/list` returns the current model-request identity for each loaded thread. Turn fields are `null` before a thread starts its first turn. While a turn is active they describe that turn; after completion, the response retains the latest persisted `turnId` and `rootTurnId` when available.
+
+The experimental raw Responses adapter accepts `turn/start.rawResponses` and
+optional `rawResponsesHeaders`. The latter permits only `x-codex-turn-state`,
+`x-codex-inference-call-id`, `traceparent`, and `tracestate` (case-insensitive,
+at most four entries, 8192 bytes per value, no duplicate names or invalid HTTP
+values). A missing inference ID receives a fresh UUID for that request. Existing
+window identity metadata is aligned with the selected thread's window header.
+The adapter returns `rawResponseBody`, `rawResponseStatus`, and
+`rawResponseHeaders`; only a bounded upstream `x-codex-turn-state` is included in
+the returned headers. Tokens are not shared or cached across requests. Normal
+turn responses set these raw response fields to `null`. The server's Codex
+transport owns authorization and User-Agent; these cannot be overridden through
+`rawResponsesHeaders`.
+
+```json
+{ "method": "thread/modelIdentity/list", "id": 22, "params": { "cursor": null, "limit": null } }
+{ "id": 22, "result": {
+    "data": [{
+        "threadId": "0199-...",
+        "sessionId": "0199-...",
+        "installationId": "6e57-...",
+        "windowId": "0199-...:0",
+        "parentThreadId": null,
+        "turnId": null,
+        "rootTurnId": null,
+        "parentTurnId": null
+    }],
+    "nextCursor": null
 } }
 ```
 

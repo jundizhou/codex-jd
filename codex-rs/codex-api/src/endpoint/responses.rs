@@ -153,6 +153,39 @@ impl<T: HttpTransport> ResponsesClient<T> {
             .await
     }
 
+    /// Streams an opaque Responses request without parsing or rebuilding its JSON body.
+    ///
+    /// This is used by trusted Codex-hosted adapters that need to preserve provider-specific
+    /// request fields while still using Codex's provider and authentication transport.
+    pub async fn stream_raw(
+        &self,
+        body: Value,
+        mut extra_headers: HeaderMap,
+        compression: Compression,
+    ) -> Result<codex_client::StreamResponse, ApiError> {
+        let body = EncodedJsonBody::encode(&body)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let request_compression = match compression {
+            Compression::None => RequestCompression::None,
+            Compression::Zstd => RequestCompression::Zstd,
+        };
+        if !extra_headers.contains_key(http::header::ACCEPT) {
+            extra_headers.insert(
+                http::header::ACCEPT,
+                HeaderValue::from_static("text/event-stream"),
+            );
+        }
+        self.session
+            .stream_encoded_json_with(
+                Method::POST,
+                self.endpoint.path(),
+                extra_headers,
+                Some(body),
+                |req| req.compression = request_compression,
+            )
+            .await
+    }
+
     async fn stream_encoded(
         &self,
         body: EncodedJsonBody,

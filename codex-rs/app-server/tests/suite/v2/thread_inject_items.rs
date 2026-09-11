@@ -302,7 +302,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(delegated_req)).await??;
     let turn_started: TurnStartedNotification =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("turn/started")).await??;

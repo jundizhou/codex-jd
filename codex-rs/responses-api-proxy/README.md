@@ -1,110 +1,123 @@
 # codex-responses-api-proxy
 
-#### tl;dr:
+`codex-responses-api-proxy` exposes a local OpenAI-compatible `POST
+/v1/responses` endpoint and sends requests through the local Codex app-server.
+The app-server owns Codex authentication, provider selection, OAuth refresh, and
+the model transport. The proxy does not read an API key from stdin and does not
+call `api.openai.com` directly.
 
-```
-# Launch the proxy, dump request/response pairs to /tmp/proxy
-cd path/to/codex/codex-rs
-cargo build
-echo $OPENAI_API_KEY | ./target/debug/codex-responses-api-proxy \
-    --port 60001 \
-    --dump-dir /tmp/proxy
+## Start
 
-
-# Add this to ~/.codex/config.toml:
-
-[model_providers.codex-responses-api-proxy]
-name = 'codex-responses-api-proxy'
-base_url = 'http://127.0.0.1:60001/v1'
-wire_api='responses'
-
-[profiles.proxy]
-model_provider = "codex-responses-api-proxy"
-
-
-# Use it
-codex -p proxy
-```
-
-# Detailed docs
-
-A strict HTTP proxy that only forwards `POST` requests to `/v1/responses` to the OpenAI API (`https://api.openai.com`), injecting the `Authorization: Bearer $OPENAI_API_KEY` header. Everything else is rejected with `403 Forbidden`.
-
-## Expected Usage
-
-**IMPORTANT:** `codex-responses-api-proxy` is designed to be run by a privileged user with access to `OPENAI_API_KEY` so that an unprivileged user cannot inspect or tamper with the process. Though if `--http-shutdown` is specified, an unprivileged user _can_ make a `GET` request to `/shutdown` to shutdown the server, as an unprivileged user could not send `SIGTERM` to kill the process.
-
-A privileged user (i.e., `root` or a user with `sudo`) who has access to `OPENAI_API_KEY` would run the following to start the server, as `codex-responses-api-proxy` reads the auth token from `stdin`:
+The app-server must already be running with the desired Codex login and
+`CODEX_HOME`:
 
 ```shell
-printenv OPENAI_API_KEY | env -u OPENAI_API_KEY codex-responses-api-proxy --http-shutdown --server-info /tmp/server-info.json
+codex app-server --listen unix:///tmp/codex-app-server.sock
+codex-responses-api-proxy \
+  --port 8787 \
+  --app-server-socket /tmp/codex-app-server.sock
 ```
 
-A non-privileged user would then run Codex as follows, specifying the `model_provider` dynamically:
+If `--app-server-socket` is omitted, the proxy uses
+`$CODEX_HOME/app-server-control/app-server-control.sock`.
+
+The endpoint is then:
 
 ```shell
-PROXY_PORT=$(jq .port /tmp/server-info.json)
-PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
-codex exec -c "model_providers.openai-proxy={ name = 'OpenAI Proxy', base_url = '${PROXY_BASE_URL}/v1', wire_api='responses' }" \
-    -c model_provider="openai-proxy" \
-    'Your prompt here'
+curl http://127.0.0.1:8787/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-5","input":"hello"}'
 ```
 
-When the unprivileged user was finished, they could shutdown the server using `curl` (since `kill -SIGTERM` is not an option):
+The request must be valid for the Codex Responses backend. The proxy does not
+turn a public OpenAI request into a Codex prompt or synthesize missing model
+fields.
 
-```shell
-curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
-```
+## Session Pool
 
-## Behavior
+At startup the proxy connects to app-server, creates five ephemeral threads,
+and reads their generated identities through `thread/modelIdentity/list`.
+Each incoming model request leases one idle thread. The lease is held until the
+model response has been collected and returned; a sixth concurrent request
+waits for an available lease. A lost app-server control connection is not
+replaced with stale identity data; restart the proxy to recreate the pool.
 
-- Reads the API key from `stdin`. All callers should pipe the key in (for example, `printenv OPENAI_API_KEY | codex-responses-api-proxy`).
-- Formats the header value as `Bearer <key>` and attempts to `mlock(2)` the memory holding that header so it is not swapped to disk.
-- Listens on the provided port or an ephemeral port if `--port` is not specified.
-- Accepts exactly `POST /v1/responses` (no query string). The request body is forwarded to `https://api.openai.com/v1/responses` with `Authorization: Bearer <key>` set. All original request headers (except any incoming `Authorization`) are forwarded upstream, with `Host` overridden to `api.openai.com`. For other requests, it responds with `403`.
-- Optionally writes a single-line JSON file with server info, currently `{ "port": <u16>, "pid": <u32> }`.
-- Optionally writes request/response JSON dumps to a directory. Each accepted request gets a pair of files that share a sequence/timestamp prefix, for example `000001-1846179912345-request.json` and `000001-1846179912345-response.json`. Header values are dumped in full except `Authorization` and any header whose name includes `cookie`, which are redacted. Bodies are written as parsed JSON when possible, otherwise as UTF-8 text.
-- Optional `--http-shutdown` enables `GET /shutdown` to terminate the process with exit code `0`. This allows one user (e.g., `root`) to start the proxy and another unprivileged user on the host to shut it down.
+## Request Preservation
+
+The proxy sends the complete incoming JSON object through the experimental
+app-server `turn/start.rawResponses` path. The raw transport does not rebuild
+the request from `input`.
+
+These identity fields are replaced with values read from the leased
+thread:
+
+- `installation_id`
+- `session_id`
+- `thread_id`
+- `root_turn_id`
+- `parent_turn_id`
+- Existing `x-codex-window-id`, `window_id`, and `context_window_id` metadata
+  use the leased thread's window identity, matching the outbound window header.
+
+The fields appear in Codex's flat and nested request metadata forms. If the
+leased thread has no root or parent lineage, stale values for those two fields
+are removed. Other request fields, including `model`, `input`, `instructions`,
+`tools`, `stream`, `previous_response_id`, `metadata`, and unknown fields, are
+preserved. Transport-owned authorization and Codex headers are generated by
+Core and app-server.
+
+The adapter forwards only `x-codex-turn-state`, `x-codex-inference-call-id`,
+`traceparent`, and `tracestate` from incoming HTTP headers. Values are bounded
+to 8192 bytes each; duplicate names are rejected case-insensitively. A missing
+inference call ID is generated once per request, not once per upstream retry.
+Explicit tracing headers are preserved by the raw HTTP transport.
+
+An upstream `x-codex-turn-state` is returned to the caller for replay. It is
+never invented or cached globally or per pool slot. There is no conversation
+affinity in the pool: replaying a token does not reserve the same thread.
+Authorization, cookies, and caller User-Agent values are not relayed; the
+server's installed Codex transport generates its real User-Agent.
 
 ## CLI
 
-```
-codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>] [--dump-dir <DIR>]
+```text
+codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>]
+  [--http-shutdown] [--dump-dir <DIR>] [--app-server-socket <PATH>]
 ```
 
-- `--port <PORT>`: Port to bind on `127.0.0.1`. If omitted, an ephemeral port is chosen.
-- `--server-info <FILE>`: If set, the proxy writes a single line of JSON with `{ "port": <PORT>, "pid": <PID> }` once listening.
-- `--http-shutdown`: If set, enables `GET /shutdown` to exit the process with code `0`.
-- `--upstream-url <URL>`: Absolute URL to forward requests to. Defaults to `https://api.openai.com/v1/responses`.
-- `--dump-dir <DIR>`: If set, writes one request JSON file and one response JSON file per accepted proxy call under this directory. Filenames use a shared sequence/timestamp prefix so each pair is easy to correlate.
-- Authentication is fixed to `Authorization: Bearer <key>` to match the Codex CLI expectations.
+- `--port`: bind on `127.0.0.1`; omitted means an ephemeral port.
+- `--server-info`: write `{ "port": <PORT>, "pid": <PID> }` after binding.
+- `--http-shutdown`: enable `GET /shutdown` for local process management.
+- `--dump-dir`: write redacted request/response dumps for accepted calls.
+- `--app-server-socket`: path to the local app-server control socket.
 
-For Azure, for example (ensure your deployment accepts `Authorization: Bearer <key>`):
+Accepted endpoints are `POST /v1/responses`, `GET /v1/models`, and
+`GET /v1/models/{id}`. Other paths and methods receive `403`.
+
+The model endpoints read all pages of app-server `model/list` with
+`includeHidden: true`, including hidden models. Queries use a separate control
+connection and do not lease a pooled thread. Each request reads the current
+app-server catalog (which may itself be cached); listing does not test model
+inference access or quota. No additional proxy cache is used.
+
+The OpenAI-compatible response uses each entry's callable `model` as `id`,
+`created: 0` because creation dates are unavailable, and `owned_by: "codex"`
+as the catalog source rather than an upstream ownership assertion. Unknown
+model IDs return JSON `404`; failed catalog queries return JSON `502` rather
+than an invented list. Catalog queries have a 30-second overall timeout.
+
+## Verification
+
+The Rust tests cover the five-session pool, identity rewriting, and deep
+request preservation. The app-server integration test captures the actual
+outbound model request and compares it with the original request after identity
+substitution, and checks routing and tracing headers in both directions.
+
+The process smoke test is:
 
 ```shell
-printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-proxy \
-  --http-shutdown \
-  --server-info /tmp/server-info.json \
-  --upstream-url "https://YOUR_PROJECT_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/responses?api-version=2025-04-01-preview"
+python tests/smoke_pool.py --proxy /absolute/path/to/codex-responses-api-proxy
 ```
 
-## Notes
-
-- Only `POST /v1/responses` is permitted. No query strings are allowed.
-- All request headers are forwarded to the upstream call (aside from overriding `Authorization` and `Host`). Response status and content-type are mirrored from upstream.
-
-## Hardening Details
-
-Care is taken to restrict access/copying to the value of `OPENAI_API_KEY` retained in memory:
-
-- We leverage [`codex_process_hardening`](https://github.com/openai/codex/blob/main/codex-rs/process-hardening/README.md) so `codex-responses-api-proxy` is run with standard process-hardening techniques.
-- At startup, we allocate a `1024` byte buffer on the stack and copy `"Bearer "` into the start of the buffer.
-- We then read from `stdin`, copying the contents into the buffer after `"Bearer "`.
-- After verifying the key matches `/^[a-zA-Z0-9_-]+$/` (and does not exceed the buffer), we create a `String` from that buffer (so the data is now on the heap).
-- We zero out the stack-allocated buffer using https://crates.io/crates/zeroize so it is not optimized away by the compiler.
-- We invoke `.leak()` on the `String` so we can treat its contents as a `&'static str`, as it will live for the rest of the process.
-- On UNIX, we `mlock(2)` the memory backing the `&'static str`.
-- When using the `&'static str` when building an HTTP request, we use `HeaderValue::from_static()` to avoid copying the `&str`.
-- We also invoke `.set_sensitive(true)` on the `HeaderValue`, which in theory indicates to other parts of the HTTP stack that the header should be treated with "special care" to avoid leakage:
-
-https://github.com/hyperium/http/blob/439d1c50d71e3be3204b6c4a1bf2255ed78e1f93/src/header/value.rs#L346-L376
+Use `--app-server` to exercise real ephemeral thread creation with an isolated
+Codex home. The mock-only mode does not validate real OAuth or model access.

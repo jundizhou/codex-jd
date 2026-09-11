@@ -192,7 +192,7 @@ async fn assert_policy_violation_completes_turn_with_typed_terminal_error(
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } = app_server
+    let TurnStartResponse { turn, .. } = app_server
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

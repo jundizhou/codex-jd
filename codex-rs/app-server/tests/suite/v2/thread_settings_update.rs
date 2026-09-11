@@ -419,7 +419,7 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(turn_request_id)).await??;
     assert!(!turn.id.is_empty());
 
@@ -456,7 +456,7 @@ async fn start_text_turn(mcp: &mut TestAppServer, thread_id: String) -> Result<(
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_TIMEOUT, mcp.read_response(turn_request_id)).await??;
     assert!(!turn.id.is_empty());
     Ok(())

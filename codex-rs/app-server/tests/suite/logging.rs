@@ -602,7 +602,7 @@ async fn app_server_emits_structured_tool_call_timing_event() -> Result<()> {
         .await?
         .thread;
 
-    let TurnStartResponse { turn } = app_server
+    let TurnStartResponse { turn, .. } = app_server
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

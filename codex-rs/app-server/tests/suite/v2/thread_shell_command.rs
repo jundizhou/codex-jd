@@ -260,7 +260,7 @@ async fn check_thread_shell_command_in_active_turn(timeout_ms: Option<i64>) -> R
         current_shell_output_command("active turn bang")?
     };
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

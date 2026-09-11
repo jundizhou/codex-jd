@@ -153,7 +153,7 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -267,7 +267,7 @@ async fn turn_steer_returns_active_turn_id() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -401,7 +401,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

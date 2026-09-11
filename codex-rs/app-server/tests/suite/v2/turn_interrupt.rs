@@ -81,7 +81,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         .await?;
 
     // Start a turn that triggers a long-running command.
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -151,7 +151,7 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -244,7 +244,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

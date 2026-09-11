@@ -679,6 +679,9 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
 
 fn sample_turn_start_response() -> ClientResponsePayload {
     ClientResponsePayload::TurnStart(TurnStartResponse {
+        raw_response_body: None,
+        raw_response_status: None,
+        raw_response_headers: None,
         turn: Turn {
             id: "turn-1".to_string(),
             items_view: codex_app_server_protocol::TurnItemsView::Full,

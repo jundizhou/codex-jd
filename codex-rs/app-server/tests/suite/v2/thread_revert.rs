@@ -429,7 +429,9 @@ async fn thread_revert_interrupts_active_turn_and_keeps_thread_loaded() -> Resul
         })
         .await?;
 
-    let TurnStartResponse { turn: active_turn } = mcp
+    let TurnStartResponse {
+        turn: active_turn, ..
+    } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

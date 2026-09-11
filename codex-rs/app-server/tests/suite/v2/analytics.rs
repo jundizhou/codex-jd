@@ -138,7 +138,7 @@ async fn guardian_review_turns_and_tools_reach_analytics() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(READ_TIMEOUT, app_server.read_response(request_id)).await??;
     let reviews = timeout(READ_TIMEOUT, async {
         loop {

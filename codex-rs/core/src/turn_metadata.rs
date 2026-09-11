@@ -309,6 +309,10 @@ impl TurnMetadataState {
         self.parent_turn_id.get().cloned()
     }
 
+    pub(crate) fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
     pub(crate) fn set_initiating_agent_path(&self, initiating_agent_path: AgentPath) {
         let _ = self.initiating_agent_path.set(initiating_agent_path);
     }

@@ -393,6 +393,9 @@ fn sample_turn_start_request(thread_id: &str, request_id: i64) -> ClientRequest 
 
 fn sample_turn_start_response(turn_id: &str) -> ClientResponsePayload {
     ClientResponsePayload::TurnStart(codex_app_server_protocol::TurnStartResponse {
+        raw_response_body: None,
+        raw_response_status: None,
+        raw_response_headers: None,
         turn: Turn {
             id: turn_id.to_string(),
             items_view: codex_app_server_protocol::TurnItemsView::Full,

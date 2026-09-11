@@ -465,7 +465,7 @@ async fn send_turn_and_wait(
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
     wait_for_turn_completed(mcp, &turn.id).await?;
     Ok(turn.id)

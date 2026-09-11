@@ -909,7 +909,7 @@ async fn start_turn(
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
 
     Ok(turn.id)

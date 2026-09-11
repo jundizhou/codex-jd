@@ -236,7 +236,10 @@ async fn without_url_redacts_transport_error_urls() {
     let address = listener.local_addr().expect("listener should have address");
     drop(listener);
     let secret = "signed-secret";
-    let error = reqwest::Client::new()
+    let error = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("direct client should build")
         .get(format!("http://{address}/upload?sig={secret}"))
         .send()
         .await

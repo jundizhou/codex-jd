@@ -151,7 +151,7 @@ async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>>
     let image_path = codex_home.path().join("image.png");
     std::fs::write(&image_path, TINY_PNG_BYTES)?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -343,7 +343,7 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -452,7 +452,9 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn: active_turn } = mcp
+    let TurnStartResponse {
+        turn: active_turn, ..
+    } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -473,7 +475,9 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
     )
     .await??;
 
-    let TurnStartResponse { turn: steered_turn } = mcp
+    let TurnStartResponse {
+        turn: steered_turn, ..
+    } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -970,7 +974,7 @@ async fn turn_start_emits_raw_response_completed_with_upstream_usage(
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -1149,7 +1153,7 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -1403,7 +1407,9 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         })
         .await?;
 
-    let TurnStartResponse { turn: first_turn } = mcp
+    let TurnStartResponse {
+        turn: first_turn, ..
+    } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -1583,7 +1589,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -1824,7 +1830,7 @@ allow_local_binding = false
         active_permission_profile.context("expected active permission profile")?;
     assert_eq!(active_permission_profile.id, "managed-network");
 
-    let TurnStartResponse { turn } = app_server
+    let TurnStartResponse { turn, .. } = app_server
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -2162,7 +2168,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
         .await?;
 
     // Start a turn with only input and thread_id set (no overrides).
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -2200,7 +2206,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     // Send a second turn that exercises the overrides path: change the model.
-    let TurnStartResponse { turn: turn2 } = mcp
+    let TurnStartResponse { turn: turn2, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -3010,7 +3016,7 @@ async fn run_turn_start_exec_approval_rejection_v2(
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -3217,6 +3223,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 collaboration_mode: None,
                 multi_agent_mode: None,
                 cyber_access_program: None,
+                raw_responses: None,
+                raw_responses_headers: None,
             },
         })
         .await?;
@@ -3264,6 +3272,8 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 collaboration_mode: None,
                 multi_agent_mode: None,
                 cyber_access_program: None,
+                raw_responses: None,
+                raw_responses_headers: None,
             },
         })
         .await?;
@@ -3536,7 +3546,7 @@ async fn run_environment_selection_case(
     let ThreadStartResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -3633,7 +3643,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -3964,7 +3974,7 @@ async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -4891,7 +4901,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         .await?;
 
     // First turn: expect FileChangeRequestApproval, respond with AcceptForSession, and verify the file exists.
-    let TurnStartResponse { turn: turn_1 } = mcp
+    let TurnStartResponse { turn: turn_1, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -4983,7 +4993,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
     assert_eq!(std::fs::read_to_string(&readme_path)?, "new line\n");
 
     // Second turn: apply a patch to the same file. Approval should be skipped due to AcceptForSession.
-    let TurnStartResponse { turn: turn_2 } = mcp
+    let TurnStartResponse { turn: turn_2, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -5119,7 +5129,7 @@ async fn run_turn_start_file_change_approval_rejection_v2(
         })
         .await?;
 
-    let TurnStartResponse { turn } = mcp
+    let TurnStartResponse { turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {
@@ -5254,7 +5264,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         })
         .await?;
 
-    let TurnStartResponse { turn: _turn } = mcp
+    let TurnStartResponse { turn: _turn, .. } = mcp
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
             params: TurnStartParams {

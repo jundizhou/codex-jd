@@ -19808,6 +19808,53 @@
       "title": "ThreadMetadataUpdateResponse",
       "type": "object"
     },
+    "ThreadModelIdentity": {
+      "properties": {
+        "installationId": {
+          "type": "string"
+        },
+        "parentThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rootTurnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "windowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installationId",
+        "sessionId",
+        "threadId",
+        "windowId"
+      ],
+      "type": "object"
+    },
     "ThreadNameUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {

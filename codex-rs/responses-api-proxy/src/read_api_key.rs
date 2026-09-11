@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 
 /// Use a generous buffer size to avoid truncation and to allow for longer API
 /// keys in the future.
-const BUFFER_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = 8192;
 const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
 
 /// Reads the auth token from stdin and returns a static `Authorization` header
@@ -203,18 +203,18 @@ fn mlock_str(value: &str) {
 #[cfg(not(unix))]
 fn mlock_str(_value: &str) {}
 
-/// The key should match /^[A-Za-z0-9\-_]+$/. Ensure there is no funny business
-/// with NUL characters and whatnot.
+/// Accept API keys and JWT-style OAuth tokens while rejecting whitespace,
+/// control characters, and header-injection bytes.
 fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
     if key_bytes
         .iter()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Ok(());
     }
 
     Err(anyhow!(
-        "API key may only contain ASCII letters, numbers, '-' or '_'"
+        "API key may only contain ASCII letters, numbers, '-', '_' or '.'"
     ))
 }
 

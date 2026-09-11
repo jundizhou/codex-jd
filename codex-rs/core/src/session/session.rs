@@ -10,6 +10,7 @@ use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
+use crate::model_request_identity::ModelRequestIdentity;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::shell_snapshot::ShellSnapshot;
@@ -605,6 +606,59 @@ impl Session {
     pub(crate) async fn originator(&self) -> String {
         let state = self.state.lock().await;
         state.session_configuration.originator.clone()
+    }
+
+    /// Returns the identity fields used when this loaded session sends model requests.
+    pub(crate) async fn model_request_identity(&self) -> ModelRequestIdentity {
+        let (window_id, _, _) = self.current_window().await;
+        let parent_thread_id = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .parent_thread_id
+                .map(|id| id.to_string())
+        };
+        let (turn_id, root_turn_id, parent_turn_id) = {
+            let active_identity = {
+                let active = self.active_turn.lock().await;
+                active
+                    .as_ref()
+                    .and_then(|active| active.task.as_ref())
+                    .map(|task| {
+                        let state = &task.turn_context.turn_metadata_state;
+                        (
+                            Some(state.turn_id().to_string()),
+                            state.root_turn_id(),
+                            state.parent_turn_id(),
+                        )
+                    })
+            };
+            match active_identity {
+                Some(identity) => identity,
+                None => {
+                    // A completed thread has no active task, but retains the last durable
+                    // turn context used as the reference for future real turns.
+                    let reference = self.reference_context_item().await;
+                    (
+                        reference.as_ref().and_then(|item| item.turn_id.clone()),
+                        reference
+                            .as_ref()
+                            .and_then(|item| item.root_turn_id.clone()),
+                        None,
+                    )
+                }
+            }
+        };
+        ModelRequestIdentity {
+            installation_id: self.installation_id.clone(),
+            session_id: self.session_id().to_string(),
+            thread_id: self.thread_id.to_string(),
+            window_id,
+            parent_thread_id,
+            turn_id,
+            root_turn_id,
+            parent_turn_id,
+        }
     }
 
     pub(crate) async fn responses_metadata(

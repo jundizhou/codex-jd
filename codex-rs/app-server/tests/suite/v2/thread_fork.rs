@@ -449,7 +449,7 @@ async fn assert_thread_fork_preserves_persisted_approvals_reviewer(
             mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
         )
         .await??;
-        let TurnStartResponse { turn } = to_response(turn_resp)?;
+        let TurnStartResponse { turn, .. } = to_response(turn_resp)?;
         timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_notification_message("turn/completed"),
@@ -611,7 +611,7 @@ async fn assert_thread_fork_at_named_boundary_keeps_only_terminal_prefix(
                 ..Default::default()
             })
             .await?;
-        let TurnStartResponse { turn } =
+        let TurnStartResponse { turn, .. } =
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_request_id)).await??;
         turn_ids.push(turn.id);
         timeout(

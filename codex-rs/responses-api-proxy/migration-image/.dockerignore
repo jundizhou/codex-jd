@@ -1,0 +1,7 @@
+*
+!bin/
+!bin/codex
+!bin/codex-app-server
+!bin/codex-responses-api-proxy
+!scripts/
+!scripts/entrypoint.sh

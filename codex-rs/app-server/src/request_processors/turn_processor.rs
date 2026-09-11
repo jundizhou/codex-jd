@@ -1,5 +1,7 @@
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
@@ -13,6 +15,10 @@ use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
+use futures::StreamExt;
+use serde_json::Map;
+use serde_json::Value;
+use uuid::Uuid;
 
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
@@ -69,6 +75,124 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
         return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
     }
     Ok(())
+}
+
+fn insert_raw_header(headers: &mut HeaderMap, name: &str, value: &str) {
+    if let (Ok(name), Ok(value)) = (
+        name.parse::<axum::http::HeaderName>(),
+        HeaderValue::from_str(value),
+    ) {
+        headers.insert(name, value);
+    }
+}
+
+fn rewrite_raw_responses_identity(
+    mut request: Value,
+    identity: &codex_core::ModelRequestIdentity,
+) -> Result<Value, JSONRPCErrorError> {
+    let Some(object) = request.as_object_mut() else {
+        return Err(invalid_request(
+            "raw Responses request must be a JSON object",
+        ));
+    };
+    let metadata = object
+        .entry("client_metadata")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(metadata) = metadata.as_object_mut() else {
+        return Err(invalid_request(
+            "raw Responses client_metadata must be an object",
+        ));
+    };
+    metadata.insert(
+        "x-codex-installation-id".to_string(),
+        Value::String(identity.installation_id.clone()),
+    );
+    metadata.insert(
+        "session_id".to_string(),
+        Value::String(identity.session_id.clone()),
+    );
+    metadata.insert(
+        "thread_id".to_string(),
+        Value::String(identity.thread_id.clone()),
+    );
+    for key in ["x-codex-window-id", "window_id", "context_window_id"] {
+        if metadata.contains_key(key) {
+            metadata.insert(key.to_string(), Value::String(identity.window_id.clone()));
+        }
+    }
+    replace_optional_raw_metadata(metadata, "root_turn_id", identity.root_turn_id.as_deref());
+    replace_optional_raw_metadata(
+        metadata,
+        "parent_turn_id",
+        identity.parent_turn_id.as_deref(),
+    );
+    if let Some(raw_nested) = metadata.get("x-codex-turn-metadata") {
+        let raw_nested = raw_nested.as_str().ok_or_else(|| {
+            invalid_request("raw Responses x-codex-turn-metadata must be a JSON string")
+        })?;
+        let nested = serde_json::from_str::<Value>(raw_nested).map_err(|error| {
+            invalid_request(format!(
+                "raw Responses x-codex-turn-metadata is invalid JSON: {error}"
+            ))
+        })?;
+        let Some(nested) = nested.as_object().cloned() else {
+            return Err(invalid_request(
+                "raw Responses x-codex-turn-metadata must contain a JSON object",
+            ));
+        };
+        let mut nested = nested;
+        nested.insert(
+            "installation_id".to_string(),
+            Value::String(identity.installation_id.clone()),
+        );
+        nested.insert(
+            "session_id".to_string(),
+            Value::String(identity.session_id.clone()),
+        );
+        nested.insert(
+            "thread_id".to_string(),
+            Value::String(identity.thread_id.clone()),
+        );
+        for key in ["window_id", "context_window_id"] {
+            if nested.contains_key(key) {
+                nested.insert(key.to_string(), Value::String(identity.window_id.clone()));
+            }
+        }
+        replace_optional_raw_metadata(
+            &mut nested,
+            "root_turn_id",
+            identity.root_turn_id.as_deref(),
+        );
+        replace_optional_raw_metadata(
+            &mut nested,
+            "parent_turn_id",
+            identity.parent_turn_id.as_deref(),
+        );
+        metadata.insert(
+            "x-codex-turn-metadata".to_string(),
+            Value::String(serde_json::to_string(&nested).unwrap_or_default()),
+        );
+    }
+    Ok(request)
+}
+
+#[cfg(test)]
+#[path = "turn_processor_tests.rs"]
+mod tests;
+
+fn replace_optional_raw_metadata(
+    metadata: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<&str>,
+) {
+    match value {
+        Some(value) => {
+            metadata.insert(key.to_string(), Value::String(value.to_string()));
+        }
+        None => {
+            metadata.remove(key);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -170,6 +294,12 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if params.raw_responses.is_some() {
+            return self
+                .raw_responses_turn_start(request_id, params)
+                .await
+                .map(|response| Some(response.into()));
+        }
         validate_user_input_image_urls(&params.input)?;
         self.turn_start_inner(
             request_id,
@@ -179,6 +309,73 @@ impl TurnRequestProcessor {
         )
         .await
         .map(|response| Some(response.into()))
+    }
+
+    async fn raw_responses_turn_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: TurnStartParams,
+    ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        let raw_request = params
+            .raw_responses
+            .ok_or_else(|| invalid_request("raw Responses request is missing"))?;
+        let (_thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        self.ensure_direct_input_allowed(&request_id, thread.as_ref())
+            .await?;
+        let model = raw_request
+            .get("model")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_request("raw Responses request requires model"))?
+            .to_string();
+        let identity = thread.model_request_identity().await;
+        let raw_request = rewrite_raw_responses_identity(raw_request, &identity)?;
+        let mut headers = super::raw_responses_headers::request_headers(
+            params.raw_responses_headers.unwrap_or_default(),
+        )?;
+        insert_raw_header(
+            &mut headers,
+            "x-codex-installation-id",
+            &identity.installation_id,
+        );
+        insert_raw_header(&mut headers, "x-codex-window-id", &identity.window_id);
+        let upstream = thread
+            .stream_raw_responses(
+                raw_request,
+                &model,
+                Some(identity.session_id.clone()),
+                Some(identity.thread_id.clone()),
+                headers,
+            )
+            .await
+            .map_err(|error| internal_error(format!("raw Responses request failed: {error}")))?;
+        let status = upstream.status.as_u16();
+        let response_headers = super::raw_responses_headers::response_headers(&upstream.headers);
+        let mut body = Vec::new();
+        let mut bytes = upstream.bytes;
+        while let Some(chunk) = bytes.next().await {
+            body.extend_from_slice(&chunk.map_err(|error| {
+                internal_error(format!("raw Responses stream failed: {error}"))
+            })?);
+        }
+        let turn_id = identity
+            .turn_id
+            .unwrap_or_else(|| Uuid::now_v7().to_string());
+        let turn = Turn {
+            id: turn_id,
+            items: vec![],
+            items_view: TurnItemsView::NotLoaded,
+            error: None,
+            status: TurnStatus::Completed,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        };
+        Ok(TurnStartResponse {
+            turn,
+            raw_response_body: Some(String::from_utf8_lossy(&body).into_owned()),
+            raw_response_status: Some(status),
+            raw_response_headers: Some(response_headers),
+        })
     }
 
     pub(crate) async fn thread_inject_items(
@@ -683,7 +880,12 @@ impl TurnRequestProcessor {
             duration_ms: None,
         };
 
-        Ok(TurnStartResponse { turn })
+        Ok(TurnStartResponse {
+            turn,
+            raw_response_body: None,
+            raw_response_status: None,
+            raw_response_headers: None,
+        })
     }
 
     async fn build_environment_override(

@@ -200,7 +200,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{}/metrics", protocol = "json" 
         })
         .await?
         .expect("turn/start");
-    let TurnStartResponse { turn } = serde_json::from_value(response)?;
+    let TurnStartResponse { turn, .. } = serde_json::from_value(response)?;
     timeout(Duration::from_secs(/*secs*/ 30), async {
         while let Some(event) = client.next_event().await {
             if let InProcessServerEvent::ServerNotification(event) = event

@@ -129,7 +129,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let started_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
@@ -529,7 +529,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } =
+    let TurnStartResponse { turn, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_id)).await??;
 
     let mut approved_subcommand_strings = Vec::new();
