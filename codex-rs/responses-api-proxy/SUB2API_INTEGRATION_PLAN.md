@@ -68,6 +68,37 @@ Content-Type: application/json
 
 HTTP 代理必须改变或重新生成 `Host`、`Content-Length`、`Connection` 等传输字段；这是网络转发行为，不属于模型请求内容变化。
 
+## 连接和 TLS 边界
+
+请求链路包含三段独立连接：
+
+```text
+客户端 ── TLS 连接 1 ──> Sub2API
+Sub2API ── 内网 HTTP 或 mTLS 连接 2 ──> Codex Worker
+Codex Worker ── Codex 自己的 TLS 连接 3 ──> OpenAI / ChatGPT
+```
+
+Sub2API 不应直接连接 OpenAI。这样 OpenAI 上游只能看到 Codex Worker 建立的连接，Sub2API 的 TLS ClientHello、SNI、证书、HTTP client、源 IP 和连接池参数不会出现在上游连接中。
+
+Sub2API 到 Worker 的严格转发应清理代理自身的连接信息：
+
+```text
+删除：Via
+删除：Forwarded
+删除：X-Forwarded-For
+删除：X-Real-IP
+删除：X-Forwarded-Host
+删除：X-Forwarded-Proto
+删除：X-Powered-By
+删除：X-Sub2API-*
+```
+
+只保留业务所需的 Codex/OpenAI headers，并替换 `Authorization` 为 Worker secret。不要把 Sub2API 的 User-Agent、Cookie 或内部追踪头传给上游。跨机器部署时，Sub2API 与 Worker 之间使用 HTTPS/mTLS；Worker 到 OpenAI 仍由现有 Codex transport 建立。
+
+不要使用 TCP 层 TLS passthrough。TLS passthrough 虽然能保留客户端连接，但 Sub2API 将无法读取响应 usage，也无法完成账号调度和费用统计。
+
+TLS 指纹无法通过配置保证完全一致，也不应手工伪造其他客户端的 JA3/JA4。验收目标是上游连接中不存在 Sub2API 的域名、证书、IP、HTTP headers 或 User-Agent，并且上游连接确实由 Codex transport 建立。
+
 ## 严格透传模式
 
 Sub2API 当前的 `openai_passthrough` 仍可能执行模型映射、reasoning 处理、tool adaptation、Codex metadata 注入和响应修复。因此不能直接把现有开关当作字节级透传模式。
@@ -223,6 +254,8 @@ Sub2API 已有 OpenAI Responses 路由和 usage 记录入口，可在现有结�
 - 保留现有 `turn/start.rawResponses` 流式转发能力。
 - 默认继续使用 server-side identity rewrite。
 - 如确有端到端字节不变需求，再增加显式 `client_identity` 开关。
+- 不把 Sub2API 直接作为 OpenAI 上游客户端；由 Codex transport 建立最终上游 TLS 连接。
+- 清理 Sub2API 到 Worker 的 `Via`、`Forwarded`、`X-Forwarded-*`、`X-Sub2API-*` 等代理头。
 - 增加 Worker 健康检查和优雅退出时的连接处理。
 - 保证每个 Worker 使用独立 `CODEX_HOME`、app-server socket 和账号登录态。
 
@@ -257,6 +290,8 @@ Sub2API 已有 OpenAI Responses 路由和 usage 记录入口，可在现有结�
 - Sub2API 到 Worker 的请求 body 与客户端 body 完全一致。
 - 只有出站认证信息被替换为 Worker secret。
 - Worker 返回的 SSE 和 JSON 响应字节保持一致。
+- OpenAI 上游连接由 Codex transport 建立，Sub2API 不直接连接 OpenAI。
+- OpenAI 上游看不到 Sub2API 的域名、证书、源 IP、User-Agent 或代理 headers。
 - Sub2API usage 页面能显示模型、账号、输入 token、输出 token、缓存 token、耗时和费用。
 - 同一个请求不会因重试产生两条计费记录。
 - Sub2API 解析失败不会修改或阻断模型响应。
