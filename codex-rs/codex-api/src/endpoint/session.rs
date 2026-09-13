@@ -23,6 +23,11 @@ pub(crate) struct EndpointSession<T: HttpTransport> {
     request_telemetry: Option<Arc<dyn RequestTelemetry>>,
 }
 
+pub(crate) enum StreamRetry {
+    Provider,
+    Never,
+}
+
 impl<T: HttpTransport> EndpointSession<T> {
     pub(crate) fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
@@ -125,6 +130,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<EncodedJsonBody>,
+        retry: StreamRetry,
         configure: C,
     ) -> Result<StreamResponse, ApiError>
     where
@@ -136,8 +142,14 @@ impl<T: HttpTransport> EndpointSession<T> {
         let request = request.into_prepared().map_err(TransportError::Build)?;
         let make_request = || request.clone();
 
+        let mut policy = self.provider.retry.to_policy();
+        match retry {
+            StreamRetry::Provider => {}
+            StreamRetry::Never => policy.max_attempts = 0,
+        }
+
         let stream = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
+            policy,
             self.request_telemetry.clone(),
             make_request,
             |req| {

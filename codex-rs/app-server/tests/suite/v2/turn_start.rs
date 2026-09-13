@@ -3225,6 +3225,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 cyber_access_program: None,
                 raw_responses: None,
                 raw_responses_headers: None,
+                raw_responses_stream: false,
             },
         })
         .await?;
@@ -3274,6 +3275,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                 cyber_access_program: None,
                 raw_responses: None,
                 raw_responses_headers: None,
+                raw_responses_stream: false,
             },
         })
         .await?;

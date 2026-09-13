@@ -270,6 +270,10 @@ pub struct TurnStartParams {
     #[experimental("turn/start.rawResponses")]
     #[ts(optional = nullable)]
     pub raw_responses_headers: Option<HashMap<String, String>>,
+    /// Stream upstream bytes in `rawResponse/stream` notifications instead of buffering the body.
+    #[experimental("turn/start.rawResponses")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub raw_responses_stream: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

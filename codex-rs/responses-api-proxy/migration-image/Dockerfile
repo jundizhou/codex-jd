@@ -1,10 +1,10 @@
-FROM ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3t64 libgcc-s1 nginx curl tini \
     && rm -rf /var/lib/apt/lists/*
-COPY bin/ /usr/local/bin/
-COPY scripts/entrypoint.sh /usr/local/bin/migration-entrypoint
-RUN chmod 755 /usr/local/bin/*
+COPY --chmod=755 bin/ /usr/local/bin/
+COPY --chmod=755 scripts/entrypoint.sh /usr/local/bin/migration-entrypoint
 ENV CODEX_HOME=/data/codex
 WORKDIR /data
 EXPOSE 8080

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-image=codex-migration:2026-09-10
+image=codex-migration:2026-09-11-token-fix
 docker info >/dev/null
 docker compose version >/dev/null
 compose=(docker compose --project-name "${CODEX_MIGRATION_PROJECT:-codex-migration}" -f compose.yaml)

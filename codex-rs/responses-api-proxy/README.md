@@ -37,10 +37,16 @@ fields.
 
 At startup the proxy connects to app-server, creates five ephemeral threads,
 and reads their generated identities through `thread/modelIdentity/list`.
-Each incoming model request leases one idle thread. The lease is held until the
-model response has been collected and returned; a sixth concurrent request
-waits for an available lease. A lost app-server control connection is not
-replaced with stale identity data; restart the proxy to recreate the pool.
+Each incoming model request leases one idle thread. When the request contains a
+stable client session or conversation identifier in its metadata, subsequent
+requests with the same identifier are pinned to the same pool thread. The lease
+is held until the model response has been collected and returned; a sixth
+concurrent request waits for an available lease. The pool still contains five
+threads and retains its five-request concurrency limit. A lost app-server
+control connection is not replaced with stale identity data; restart the proxy
+to recreate the pool. If more than five different client keys compete for the
+pool, an idle slot may be rebound to a newer key; the pool capacity remains
+five.
 
 ## Request Preservation
 
@@ -73,10 +79,25 @@ inference call ID is generated once per request, not once per upstream retry.
 Explicit tracing headers are preserved by the raw HTTP transport.
 
 An upstream `x-codex-turn-state` is returned to the caller for replay. It is
-never invented or cached globally or per pool slot. There is no conversation
-affinity in the pool: replaying a token does not reserve the same thread.
+never invented or cached globally or per pool slot. The turn-state is still
+forwarded exactly as received; conversation affinity is derived separately from
+stable client metadata and does not alter the turn-state token.
 Authorization, cookies, and caller User-Agent values are not relayed; the
 server's installed Codex transport generates its real User-Agent.
+
+## Forwarding Boundary
+
+For each accepted `POST /v1/responses`, the proxy performs one identity rewrite,
+one app-server `turn/start.rawResponses` call, and one upstream Responses POST.
+Raw forwarding disables transport/status retries and allows the app-server control
+wait up to one hour. Streaming requests flush each upstream byte chunk through
+the app-server raw stream notifications before the terminal RPC result. Upstream HTTP error statuses
+and error bodies are returned instead of converting quota failures into 502s.
+Control operations retain their 30-second timeout. Client-side timeouts or
+explicit retries remain outside this forwarding boundary.
+The proxy does not execute tools, append prompts, rebuild history, or run an
+agent loop. A client that is itself an agent may send several independent HTTP
+requests during one user turn; each request is forwarded independently.
 
 ## CLI
 

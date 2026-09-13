@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RawResponseStreamEvent": {
+      "oneOf": [
+        {
+          "properties": {
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "status": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "started"
+              ],
+              "title": "StartedRawResponseStreamEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "headers",
+            "status",
+            "type"
+          ],
+          "title": "StartedRawResponseStreamEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "description": "Exact upstream octets, at most 16 KiB per notification. No UTF-8/SSE decoding.",
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "chunk"
+              ],
+              "title": "ChunkRawResponseStreamEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "type"
+          ],
+          "title": "ChunkRawResponseStreamEvent",
+          "type": "object"
+        }
+      ]
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "int64",
+          "type": "integer"
+        }
+      ]
+    }
+  },
+  "description": "Opaque upstream transport data for one streaming `turn/start.rawResponses` RPC. Sent only to the requesting connection. The terminal RPC result/error ends the stream.",
+  "properties": {
+    "event": {
+      "$ref": "#/definitions/RawResponseStreamEvent"
+    },
+    "requestId": {
+      "$ref": "#/definitions/RequestId"
+    }
+  },
+  "required": [
+    "event",
+    "requestId"
+  ],
+  "title": "RawResponseStreamNotification",
+  "type": "object"
+}

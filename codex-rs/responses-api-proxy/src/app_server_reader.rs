@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -30,6 +31,10 @@ static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 const HANDSHAKE_URL: &str = "ws://localhost/rpc";
 const SESSION_POOL_SIZE: usize = 5;
+// Raw model responses can legitimately take several minutes for large contexts.
+// The stream itself still has the app-server idle timeout; this control timeout
+// only bounds a connection that stops producing a terminal RPC response.
+pub(super) const RAW_RESPONSE_CONTROL_TIMEOUT: Duration = Duration::from_secs(3600);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,16 +109,9 @@ impl AppServerIdentityClient {
         thread_id: &str,
         body: Value,
         headers: HashMap<String, String>,
-    ) -> Result<RawResponseResult> {
-        run_raw_response(&self.socket, thread_id, body, headers)
+    ) -> Result<crate::raw_response_stream::RawResponseStream> {
+        crate::raw_response_stream::start(&self.socket, thread_id, body, headers)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RawResponseResult {
-    pub(crate) status: u16,
-    pub(crate) body: String,
-    pub(crate) headers: HashMap<String, String>,
 }
 
 pub(crate) fn default_app_server_socket() -> Result<PathBuf> {
@@ -131,7 +129,7 @@ pub(crate) fn resolve_socket_arg(value: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn request_id(prefix: &str) -> String {
+pub(super) fn request_id(prefix: &str) -> String {
     format!(
         "responses-proxy-{prefix}-{}-{}",
         std::process::id(),
@@ -170,7 +168,7 @@ pub(super) async fn connect(socket: &Path) -> Result<WebSocketStream<UnixStream>
     Ok(stream)
 }
 
-async fn send_message<S>(stream: &mut WebSocketStream<S>, message: &Value) -> Result<()>
+pub(super) async fn send_message<S>(stream: &mut WebSocketStream<S>, message: &Value) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -180,7 +178,7 @@ where
         .context("failed to write app-server JSON-RPC message")
 }
 
-async fn recv_message<S>(stream: &mut WebSocketStream<S>) -> Result<Value>
+pub(super) async fn recv_message<S>(stream: &mut WebSocketStream<S>) -> Result<Value>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -218,7 +216,19 @@ pub(super) async fn send_and_wait_for_response<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    send_and_wait_for_response_with_timeout(stream, method, params, Duration::from_secs(30)).await
+}
+
+async fn send_and_wait_for_response_with_timeout<S>(
+    stream: &mut WebSocketStream<S>,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(timeout, async {
         let id = request_id(method);
         send_message(
             stream,
@@ -275,47 +285,6 @@ where
         }),
     )
     .await
-}
-
-fn run_raw_response(
-    socket: &Path,
-    thread_id: &str,
-    body: Value,
-    headers: HashMap<String, String>,
-) -> Result<RawResponseResult> {
-    let socket = socket.to_path_buf();
-    let thread_id = thread_id.to_string();
-    let runtime = tokio::runtime::Runtime::new().context("failed to start raw response runtime")?;
-    runtime.block_on(async move {
-        let mut stream = connect(&socket).await?;
-        initialize(&mut stream).await?;
-        let result = send_and_wait_for_response(
-            &mut stream,
-            "turn/start",
-            serde_json::json!({
-                "threadId": thread_id,
-                "input": [],
-                "rawResponses": body,
-                "rawResponsesHeaders": headers,
-            }),
-        )
-        .await?;
-        Ok(RawResponseResult {
-            headers: match result.get("rawResponseHeaders") {
-                None | Some(Value::Null) => HashMap::new(),
-                Some(headers) => serde_json::from_value(headers.clone())?,
-            },
-            status: result
-                .get("rawResponseStatus")
-                .and_then(Value::as_u64)
-                .unwrap_or(200) as u16,
-            body: result
-                .get("rawResponseBody")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        })
-    })
 }
 
 async fn create_pool_threads<S>(stream: &mut WebSocketStream<S>) -> Result<Vec<String>>

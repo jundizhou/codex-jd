@@ -23,6 +23,8 @@ use uuid::Uuid;
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
 
+const RAW_RESPONSES_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 pub(super) fn validate_user_input_image_urls(
     input: &[V2UserInput],
 ) -> Result<(), JSONRPCErrorError> {
@@ -338,24 +340,57 @@ impl TurnRequestProcessor {
             &identity.installation_id,
         );
         insert_raw_header(&mut headers, "x-codex-window-id", &identity.window_id);
-        let upstream = thread
-            .stream_raw_responses(
+        let upstream = tokio::time::timeout(
+            RAW_RESPONSES_IDLE_TIMEOUT,
+            thread.stream_raw_responses(
                 raw_request,
                 &model,
                 Some(identity.session_id.clone()),
                 Some(identity.thread_id.clone()),
                 headers,
-            )
-            .await
-            .map_err(|error| internal_error(format!("raw Responses request failed: {error}")))?;
+            ),
+        )
+        .await
+        .map_err(|_| internal_error("raw Responses request timed out"))?
+        .map_err(|error| internal_error(format!("raw Responses request failed: {error}")))?;
         let status = upstream.status.as_u16();
         let response_headers = super::raw_responses_headers::response_headers(&upstream.headers);
+        if params.raw_responses_stream {
+            super::raw_responses_stream::send(
+                &self.outgoing,
+                &request_id,
+                codex_app_server_protocol::RawResponseStreamEvent::Started {
+                    status,
+                    headers: response_headers.clone(),
+                },
+            )
+            .await?;
+        }
         let mut body = Vec::new();
         let mut bytes = upstream.bytes;
-        while let Some(chunk) = bytes.next().await {
-            body.extend_from_slice(&chunk.map_err(|error| {
-                internal_error(format!("raw Responses stream failed: {error}"))
-            })?);
+        loop {
+            let chunk = tokio::time::timeout(RAW_RESPONSES_IDLE_TIMEOUT, bytes.next())
+                .await
+                .map_err(|_| internal_error("raw Responses stream idle timeout"))?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            let chunk = chunk
+                .map_err(|error| internal_error(format!("raw Responses stream failed: {error}")))?;
+            if params.raw_responses_stream {
+                for data in chunk.chunks(16 * 1024) {
+                    super::raw_responses_stream::send(
+                        &self.outgoing,
+                        &request_id,
+                        codex_app_server_protocol::RawResponseStreamEvent::Chunk {
+                            data: data.to_vec(),
+                        },
+                    )
+                    .await?;
+                }
+            } else {
+                body.extend_from_slice(&chunk);
+            }
         }
         let turn_id = identity
             .turn_id
@@ -372,7 +407,8 @@ impl TurnRequestProcessor {
         };
         Ok(TurnStartResponse {
             turn,
-            raw_response_body: Some(String::from_utf8_lossy(&body).into_owned()),
+            raw_response_body: (!params.raw_responses_stream)
+                .then(|| String::from_utf8_lossy(&body).into_owned()),
             raw_response_status: Some(status),
             raw_response_headers: Some(response_headers),
         })

@@ -609,6 +609,12 @@ turn responses set these raw response fields to `null`. The server's Codex
 transport owns authorization and User-Agent; these cannot be overridden through
 `rawResponsesHeaders`.
 
+Set `rawResponsesStream: true` to receive exact upstream octets incrementally in
+`rawResponse/stream` notifications targeted to the requesting connection. The
+sequence starts with `Started`, followed by bounded `Chunk` events; the
+`turn/start` result remains the terminal marker. The adapter does not parse or
+execute streamed content.
+
 ```json
 { "method": "thread/modelIdentity/list", "id": 22, "params": { "cursor": null, "limit": null } }
 { "id": 22, "result": {

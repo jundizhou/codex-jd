@@ -4805,6 +4805,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         cyber_access_program: None,
         raw_responses: None,
         raw_responses_headers: None,
+        raw_responses_stream: false,
     };
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");

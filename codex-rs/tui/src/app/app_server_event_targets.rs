@@ -100,6 +100,7 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::RawResponseCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::RawResponseStream(_) => None,
         ServerNotification::AgentMessageDelta(notification) => {
             Some(notification.thread_id.as_str())
         }

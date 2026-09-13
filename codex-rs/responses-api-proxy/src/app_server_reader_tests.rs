@@ -3,6 +3,46 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[tokio::test]
+async fn raw_rpc_can_wait_past_the_control_deadline() {
+    let (client, server) = tokio::io::duplex(16_384);
+    let mut client = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        client,
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        /*config*/ None,
+    )
+    .await;
+    let mut server = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        server,
+        tokio_tungstenite::tungstenite::protocol::Role::Server,
+        /*config*/ None,
+    )
+    .await;
+    let serve = async {
+        let request = super::recv_message(&mut server).await.expect("raw request");
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        super::send_message(
+            &mut server,
+            &json!({"id": request["id"], "result": {"rawResponseBody": "OK"}}),
+        )
+        .await
+        .expect("delayed reply");
+    };
+    let (result, ()) = tokio::join!(
+        super::send_and_wait_for_response_with_timeout(
+            &mut client,
+            "turn/start",
+            json!({"rawResponses": {"model": "gpt-test"}}),
+            std::time::Duration::from_secs(60 * 60),
+        ),
+        serve
+    );
+    assert_eq!(
+        result.expect("raw response"),
+        json!({"rawResponseBody": "OK"})
+    );
+}
+
+#[tokio::test]
 async fn follows_identity_pages_and_rejects_cursor_cycles() {
     for cycle in [false, true] {
         let (client, server) = tokio::io::duplex(16_384);

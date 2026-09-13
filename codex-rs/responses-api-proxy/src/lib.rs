@@ -1,6 +1,5 @@
 use std::fs::File;
 use std::fs::{self};
-use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -8,6 +7,9 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -22,12 +24,16 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 
+mod affinity;
 mod app_server_reader;
 mod dump;
 mod identity;
 mod models;
+mod raw_response_stream;
 mod rewrite;
 mod session_pool;
+mod stream_http;
+use affinity::key_for_request;
 use app_server_reader::AppServerIdentityClient;
 use app_server_reader::resolve_socket_arg;
 use dump::ExchangeDumper;
@@ -69,6 +75,8 @@ struct ServerInfo {
 struct ForwardConfig {
     identity_client: Arc<AppServerIdentityClient>,
 }
+
+static PROXY_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
@@ -150,7 +158,7 @@ fn forward_request(
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
     session_pool: &SessionPool,
-    req: Request,
+    mut req: Request,
 ) -> Result<()> {
     let method = req.method().clone();
     let url = req.url();
@@ -170,8 +178,11 @@ fn forward_request(
         return Ok(());
     }
 
-    let identity = session_pool.acquire();
-    let result = forward_request_with_identity(config, dump_dir, &identity, req);
+    let mut body = Vec::new();
+    req.as_reader().read_to_end(&mut body)?;
+    let affinity_key = key_for_request(&body);
+    let identity = session_pool.acquire(affinity_key.as_deref());
+    let result = forward_request_with_identity(config, dump_dir, &identity, req, body);
     session_pool.release(identity);
     result
 }
@@ -180,8 +191,11 @@ fn forward_request_with_identity(
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
     identity: &SessionIdentity,
-    mut req: Request,
+    req: Request,
+    body: Vec<u8>,
 ) -> Result<()> {
+    let request_id = PROXY_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let started_at = Instant::now();
     let effective_identity = match config.identity_client.read_identity(&identity.thread_id) {
         Ok(Some(identity)) => identity,
         Ok(None) => {
@@ -195,8 +209,11 @@ fn forward_request_with_identity(
     };
     let method = req.method().clone();
     let url_path = req.url().to_string();
-    let mut body = Vec::new();
-    req.as_reader().read_to_end(&mut body)?;
+    eprintln!(
+        "responses-proxy request_start id={request_id} thread_id={} body_bytes={}",
+        effective_identity.thread_id,
+        body.len()
+    );
     let rewritten = match rewrite_body(&body, &effective_identity) {
         Ok(rewritten) => rewritten,
         Err(error) => {
@@ -255,21 +272,20 @@ fn forward_request_with_identity(
                 .map_err(|_| anyhow!("invalid upstream routing header"))?,
         );
     }
-    let response_body = Cursor::new(result.body.into_bytes());
+    let response_body = result.body;
     let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {
         let headers = reqwest::header::HeaderMap::new();
         Box::new(exchange_dump.tee_response_body(status_code, &headers, response_body))
     } else {
         Box::new(response_body)
     };
-    let response = Response::new(
-        status,
-        std::mem::take(&mut response_headers),
-        response_body,
-        None,
-        None,
+    stream_http::respond(req, status, &response_headers, response_body)?;
+    eprintln!(
+        "responses-proxy request_end id={request_id} thread_id={} raw_calls=1 status={} elapsed_ms={}",
+        effective_identity.thread_id,
+        status_code,
+        started_at.elapsed().as_millis()
     );
-    req.respond(response)?;
     Ok(())
 }
 

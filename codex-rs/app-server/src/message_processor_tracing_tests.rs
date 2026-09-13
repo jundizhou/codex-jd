@@ -686,6 +686,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                     cyber_access_program: None,
                     raw_responses: None,
                     raw_responses_headers: None,
+                    raw_responses_stream: false,
                 },
             },
             Some(remote_trace),

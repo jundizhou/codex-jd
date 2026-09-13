@@ -3491,6 +3491,81 @@
       ],
       "type": "object"
     },
+    "RawResponseStreamEvent": {
+      "oneOf": [
+        {
+          "properties": {
+            "headers": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "status": {
+              "format": "uint16",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "started"
+              ],
+              "title": "StartedRawResponseStreamEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "headers",
+            "status",
+            "type"
+          ],
+          "title": "StartedRawResponseStreamEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "description": "Exact upstream octets, at most 16 KiB per notification. No UTF-8/SSE decoding.",
+              "items": {
+                "format": "uint8",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "chunk"
+              ],
+              "title": "ChunkRawResponseStreamEventType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "type"
+          ],
+          "title": "ChunkRawResponseStreamEvent",
+          "type": "object"
+        }
+      ]
+    },
+    "RawResponseStreamNotification": {
+      "description": "Opaque upstream transport data for one streaming `turn/start.rawResponses` RPC. Sent only to the requesting connection. The terminal RPC result/error ends the stream.",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/RawResponseStreamEvent"
+        },
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        }
+      },
+      "required": [
+        "event",
+        "requestId"
+      ],
+      "type": "object"
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -7303,6 +7378,26 @@
         "params"
       ],
       "title": "Item/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "rawResponse/stream"
+          ],
+          "title": "RawResponse/streamNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RawResponseStreamNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "RawResponse/streamNotification",
       "type": "object"
     },
     {

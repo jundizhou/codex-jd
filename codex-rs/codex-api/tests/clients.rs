@@ -478,6 +478,27 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 }
 
 #[tokio::test]
+async fn raw_stream_does_not_retry_transport_error() -> Result<()> {
+    let transport = FlakyTransport::new();
+    let mut provider = provider("openai");
+    provider.retry.max_attempts = 3;
+    provider.retry.retry_transport = true;
+    let client = ResponsesClient::new(transport.clone(), provider, Arc::new(NoAuth));
+
+    let result = client
+        .stream_raw(
+            serde_json::json!({"model": "gpt-test"}),
+            HeaderMap::new(),
+            Compression::None,
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(transport.attempts(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn streaming_client_retries_on_transient_auth_error() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());

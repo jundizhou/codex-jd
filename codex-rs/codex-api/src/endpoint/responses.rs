@@ -2,6 +2,7 @@ use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
+use crate::endpoint::session::StreamRetry;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
@@ -14,6 +15,7 @@ use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
+use codex_client::TransportError;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -157,6 +159,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ///
     /// This is used by trusted Codex-hosted adapters that need to preserve provider-specific
     /// request fields while still using Codex's provider and authentication transport.
+    /// Failures are returned without replaying a possibly accepted request.
     pub async fn stream_raw(
         &self,
         body: Value,
@@ -175,15 +178,32 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 HeaderValue::from_static("text/event-stream"),
             );
         }
-        self.session
+        let response = self
+            .session
             .stream_encoded_json_with(
                 Method::POST,
                 self.endpoint.path(),
                 extra_headers,
                 Some(body),
+                StreamRetry::Never,
                 |req| req.compression = request_compression,
             )
-            .await
+            .await;
+        match response {
+            Err(ApiError::Transport(TransportError::Http {
+                status,
+                headers,
+                body,
+                ..
+            })) => Ok(codex_client::StreamResponse {
+                status,
+                headers: headers.unwrap_or_default(),
+                bytes: Box::pin(futures::stream::once(async move {
+                    Ok(bytes::Bytes::from(body.unwrap_or_default()))
+                })),
+            }),
+            response => response,
+        }
     }
 
     async fn stream_encoded(
@@ -205,6 +225,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 self.endpoint.path(),
                 extra_headers,
                 Some(body),
+                StreamRetry::Provider,
                 |req| {
                     req.headers.insert(
                         http::header::ACCEPT,
