@@ -35,6 +35,38 @@ The default binding is local-only. For remote clients, use a TLS reverse proxy
 or VPN. Setting `BIND_ADDRESS=0.0.0.0` exposes unencrypted HTTP; do not send
 credentials or prompts over an untrusted network this way.
 
+### Local Sub2API to a remote Codex host
+
+For development, keep the server bound to loopback and create an SSH tunnel
+from the machine running Sub2API:
+
+```sh
+ssh -N -L 18876:127.0.0.1:18876 user@codex-server
+```
+
+With the tunnel running, the local endpoint is
+`http://127.0.0.1:18876/v1`. Configure a Sub2API OpenAI-compatible account with
+that Base URL and the token printed by `./migrate.sh token` on the server. Check
+the connection before sending a model request:
+
+```sh
+curl -fsS http://127.0.0.1:18876/healthz
+curl -fsS http://127.0.0.1:18876/v1/models \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+If Sub2API runs in Docker on the local machine, `127.0.0.1` points to the
+Sub2API container. Use `http://host.docker.internal:18876/v1` instead and add
+this mapping to the Sub2API Compose service on Linux:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+The tunnel carries the request to the server's Codex proxy without exposing
+the proxy port publicly. Close the SSH process when the test is complete.
+
 ## Operations
 
 ```sh

@@ -18,6 +18,21 @@ codex-responses-api-proxy \
   --app-server-socket /tmp/codex-app-server.sock
 ```
 
+For a worker reached by Sub2API on another machine, bind the proxy to the
+worker's private interface and configure a shared secret:
+
+```shell
+codex-responses-api-proxy \
+  --listen-address 0.0.0.0 \
+  --port 8787 \
+  --app-server-socket /run/codex/account-a.sock \
+  --worker-api-key worker-secret-a
+```
+
+The same secret must be sent as `Authorization: Bearer worker-secret-a` by
+Sub2API. Without `--worker-api-key` (or `CODEX_WORKER_API_KEY`), authentication
+remains disabled for backwards-compatible local development.
+
 If `--app-server-socket` is omitted, the proxy uses
 `$CODEX_HOME/app-server-control/app-server-control.sock`.
 
@@ -28,6 +43,9 @@ curl http://127.0.0.1:8787/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{"model":"gpt-5","input":"hello"}'
 ```
+
+`GET /healthz` returns `200 OK` with `ok` and is suitable for load-balancer
+health checks. It does not require authentication.
 
 The request must be valid for the Codex Responses backend. The proxy does not
 turn a public OpenAI request into a Codex prompt or synthesize missing model
@@ -103,17 +121,24 @@ requests during one user turn; each request is forwarded independently.
 
 ```text
 codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>]
-  [--http-shutdown] [--dump-dir <DIR>] [--app-server-socket <PATH>]
+  [--listen-address <IP>] [--http-shutdown] [--dump-dir <DIR>]
+  [--app-server-socket <PATH>] [--worker-api-key <SECRET>]
 ```
 
-- `--port`: bind on `127.0.0.1`; omitted means an ephemeral port.
+- `--listen-address`: bind address; defaults to `127.0.0.1`. Use `0.0.0.0`
+  only when the worker is protected by a private network or TLS proxy.
+- `--port`: TCP port; omitted means an ephemeral port.
 - `--server-info`: write `{ "port": <PORT>, "pid": <PID> }` after binding.
 - `--http-shutdown`: enable `GET /shutdown` for local process management.
 - `--dump-dir`: write redacted request/response dumps for accepted calls.
 - `--app-server-socket`: path to the local app-server control socket.
+- `--worker-api-key`: require this shared secret in the inbound Bearer token.
+  The `CODEX_WORKER_API_KEY` environment variable is also accepted.
 
-Accepted endpoints are `POST /v1/responses`, `GET /v1/models`, and
-`GET /v1/models/{id}`. Other paths and methods receive `403`.
+Accepted endpoints are `POST /v1/responses`, `GET /v1/models`,
+`GET /v1/models/{id}`, and `GET /healthz`. Other paths and methods receive
+`403`. When a worker API key is configured, model and response endpoints
+require a matching Bearer token; `/healthz` remains unauthenticated.
 
 The model endpoints read all pages of app-server `model/list` with
 `includeHidden: true`, including hidden models. Queries use a separate control
