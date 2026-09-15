@@ -30,7 +30,6 @@ use crate::identity::SessionIdentity;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 const HANDSHAKE_URL: &str = "ws://localhost/rpc";
-const SESSION_POOL_SIZE: usize = 5;
 // Raw model responses can legitimately take several minutes for large contexts.
 // The stream itself still has the app-server idle timeout; this control timeout
 // only bounds a connection that stops producing a terminal RPC response.
@@ -74,13 +73,13 @@ impl AppServerIdentityClient {
         crate::models::respond(&self.socket, req)
     }
 
-    pub(crate) fn start(socket: PathBuf) -> Result<(Self, Vec<SessionIdentity>)> {
+    pub(crate) fn start(socket: PathBuf, pool_size: usize) -> Result<(Self, Vec<SessionIdentity>)> {
         let (command_tx, command_rx) = tokio_mpsc::unbounded_channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let worker_socket = socket.clone();
         std::thread::Builder::new()
             .name("responses-proxy-app-server".to_string())
-            .spawn(move || run_worker(worker_socket, command_rx, ready_tx))
+            .spawn(move || run_worker(worker_socket, command_rx, ready_tx, pool_size))
             .context("failed to start app-server identity worker")?;
 
         let identities = ready_rx
@@ -287,12 +286,15 @@ where
     .await
 }
 
-async fn create_pool_threads<S>(stream: &mut WebSocketStream<S>) -> Result<Vec<String>>
+async fn create_pool_threads<S>(
+    stream: &mut WebSocketStream<S>,
+    pool_size: usize,
+) -> Result<Vec<String>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let mut thread_ids = Vec::with_capacity(SESSION_POOL_SIZE);
-    for _ in 0..SESSION_POOL_SIZE {
+    let mut thread_ids = Vec::with_capacity(pool_size);
+    for _ in 0..pool_size {
         let result = send_and_wait_for_response(
             stream,
             "thread/start",
@@ -374,6 +376,7 @@ fn run_worker(
     socket: PathBuf,
     mut command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     ready_tx: mpsc::SyncSender<Result<Vec<SessionIdentity>, String>>,
+    pool_size: usize,
 ) {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -392,7 +395,7 @@ fn run_worker(
         };
         let setup = async {
             initialize(&mut stream).await?;
-            let thread_ids = create_pool_threads(&mut stream).await?;
+            let thread_ids = create_pool_threads(&mut stream, pool_size).await?;
             select_pool_identities(&thread_ids, load_identities(&mut stream).await?)
         }
         .await;

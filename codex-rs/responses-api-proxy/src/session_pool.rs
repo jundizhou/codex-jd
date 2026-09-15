@@ -9,7 +9,9 @@ use anyhow::Result;
 
 use super::identity::SessionIdentity;
 
-const POOL_SIZE: usize = 5;
+/// Pool size used when neither `--session-pool-size` nor
+/// `CODEX_SESSION_POOL_SIZE` is provided.
+pub(crate) const DEFAULT_SESSION_POOL_SIZE: usize = 5;
 
 pub(crate) struct SessionPool {
     state: Mutex<PoolState>,
@@ -23,10 +25,9 @@ struct PoolState {
 
 impl SessionPool {
     pub(crate) fn new(identities: Vec<SessionIdentity>) -> Result<Self> {
-        if identities.len() != POOL_SIZE {
+        if identities.is_empty() {
             return Err(anyhow::anyhow!(
-                "expected {POOL_SIZE} app-server sessions, received {}",
-                identities.len()
+                "session pool requires at least one app-server session"
             ));
         }
 
@@ -161,12 +162,12 @@ mod tests {
     }
 
     #[test]
-    fn requires_exactly_five_sessions() {
-        let result = SessionPool::new((0..4).map(identity).collect());
+    fn rejects_empty_pool() {
+        let result = SessionPool::new(Vec::new());
 
         assert_eq!(
             result.err().map(|error| error.to_string()),
-            Some("expected 5 app-server sessions, received 4".to_string())
+            Some("session pool requires at least one app-server session".to_string())
         );
     }
 

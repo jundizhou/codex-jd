@@ -75,6 +75,12 @@ pub struct Args {
     /// When omitted, authentication is disabled for backwards compatibility.
     #[arg(long, value_name = "SECRET")]
     pub worker_api_key: Option<String>,
+
+    /// Number of app-server sessions in the forwarding pool.
+    /// Falls back to CODEX_SESSION_POOL_SIZE, then to
+    /// [session_pool::DEFAULT_SESSION_POOL_SIZE].
+    #[arg(long, value_name = "N")]
+    pub session_pool_size: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -90,16 +96,34 @@ struct ForwardConfig {
 
 static PROXY_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+fn resolve_session_pool_size(cli_value: Option<usize>) -> Result<usize> {
+    let size = match cli_value {
+        Some(size) => size,
+        None => match std::env::var("CODEX_SESSION_POOL_SIZE") {
+            Ok(raw) => raw
+                .trim()
+                .parse::<usize>()
+                .with_context(|| format!("invalid CODEX_SESSION_POOL_SIZE: {raw}"))?,
+            Err(_) => session_pool::DEFAULT_SESSION_POOL_SIZE,
+        },
+    };
+    anyhow::ensure!(size >= 1, "session pool size must be at least 1");
+    Ok(size)
+}
+
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
+    let session_pool_size = resolve_session_pool_size(args.session_pool_size)?;
     let app_server_socket = resolve_socket_arg(args.app_server_socket.clone())?;
-    let (identity_client, identities) = AppServerIdentityClient::start(app_server_socket.clone())
-        .with_context(|| {
-        format!(
-            "failed to create proxy sessions through {}",
-            app_server_socket.display()
-        )
-    })?;
+    let (identity_client, identities) =
+        AppServerIdentityClient::start(app_server_socket.clone(), session_pool_size).with_context(
+            || {
+                format!(
+                    "failed to create proxy sessions through {}",
+                    app_server_socket.display()
+                )
+            },
+        )?;
     let session_pool = Arc::new(SessionPool::new(identities)?);
     let identity_client = Arc::new(identity_client);
 
