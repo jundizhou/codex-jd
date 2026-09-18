@@ -603,11 +603,16 @@ at most four entries, 8192 bytes per value, no duplicate names or invalid HTTP
 values). A missing inference ID receives a fresh UUID for that request. Existing
 window identity metadata is aligned with the selected thread's window header.
 The adapter returns `rawResponseBody`, `rawResponseStatus`, and
-`rawResponseHeaders`; only a bounded upstream `x-codex-turn-state` is included in
-the returned headers. Tokens are not shared or cached across requests. Normal
+`rawResponseHeaders`; the response allowlist contains `x-codex-turn-state`
+(at most 8192 bytes), `retry-after` and `content-type` (at most 1024 bytes each).
+Duplicate, oversized and invalid text values are omitted; other headers,
+including credentials and cookies, are never forwarded. Retry-After is preserved
+verbatim for the caller to interpret. Tokens are not shared or cached across requests. Normal
 turn responses set these raw response fields to `null`. The server's Codex
 transport owns authorization and User-Agent; these cannot be overridden through
-`rawResponsesHeaders`.
+`rawResponsesHeaders`. Waiting for the upstream response and waiting between body
+chunks both use the thread provider's `stream_idle_timeout_ms` (default 300000 ms).
+The raw adapter does not retry timed-out requests.
 
 Set `rawResponsesStream: true` to receive exact upstream octets incrementally in
 `rawResponse/stream` notifications targeted to the requesting connection. The

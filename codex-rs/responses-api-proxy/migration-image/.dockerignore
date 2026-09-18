@@ -5,3 +5,4 @@
 !bin/codex-responses-api-proxy
 !scripts/
 !scripts/entrypoint.sh
+!scripts/account-switcher.sh

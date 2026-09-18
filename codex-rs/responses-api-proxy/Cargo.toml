@@ -18,20 +18,27 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
+codex-http-client = { workspace = true }
+codex-login = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-process-hardening = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 ctor = { workspace = true }
 futures = { workspace = true }
+httpdate = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

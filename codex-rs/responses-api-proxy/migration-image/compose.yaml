@@ -1,6 +1,6 @@
 services:
   api:
-    image: codex-migration:2026-09-11-token-fix
+    image: codex-migration:2026-09-18-admin-ui-bundle1
     platform: linux/amd64
     restart: unless-stopped
     ports:
@@ -13,8 +13,24 @@ services:
       ALL_PROXY: ${OUTBOUND_PROXY:-}
       NO_PROXY: localhost,127.0.0.1
       RUST_LOG: ${RUST_LOG:-}
+      CODEX_WORKER_QUEUE: ${CODEX_WORKER_QUEUE:-1}
+      CODEX_WORKER_QUEUE_AUTO_RECOVER: ${CODEX_WORKER_QUEUE_AUTO_RECOVER:-0}
+      CODEX_SESSION_POOL_SIZE: ${CODEX_SESSION_POOL_SIZE:-32}
+      CODEX_WORKER_QUEUE_MAX_RUNNING: ${CODEX_WORKER_QUEUE_MAX_RUNNING:-2}
+      CODEX_WORKER_QUEUE_GAP_MS: ${CODEX_WORKER_QUEUE_GAP_MS:-800}
+      CODEX_WORKER_QUEUE_USER_GAP_MS: ${CODEX_WORKER_QUEUE_USER_GAP_MS:-1500}
+      CODEX_WORKER_QUEUE_TOOL_GAP_MS: ${CODEX_WORKER_QUEUE_TOOL_GAP_MS:-300}
+      CODEX_WORKER_QUEUE_START_GAP_MS: ${CODEX_WORKER_QUEUE_START_GAP_MS:-300}
+      CODEX_WORKER_QUEUE_IDLE_TTL_SECS: ${CODEX_WORKER_QUEUE_IDLE_TTL_SECS:-900}
+      CODEX_WORKER_AUTO_SWITCH: ${CODEX_WORKER_AUTO_SWITCH:-0}
+      CODEX_ACCOUNT_PROFILES_DIR: /data/accounts
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 volumes:
   codex-data:

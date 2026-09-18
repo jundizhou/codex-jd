@@ -23,8 +23,6 @@ use uuid::Uuid;
 use crate::image_url::REMOTE_IMAGE_URL_ERROR;
 use crate::image_url::is_remote_image_url;
 
-const RAW_RESPONSES_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
-
 pub(super) fn validate_user_input_image_urls(
     input: &[V2UserInput],
 ) -> Result<(), JSONRPCErrorError> {
@@ -340,8 +338,9 @@ impl TurnRequestProcessor {
             &identity.installation_id,
         );
         insert_raw_header(&mut headers, "x-codex-window-id", &identity.window_id);
+        let idle_timeout = thread.config().await.model_provider.stream_idle_timeout();
         let upstream = tokio::time::timeout(
-            RAW_RESPONSES_IDLE_TIMEOUT,
+            idle_timeout,
             thread.stream_raw_responses(
                 raw_request,
                 &model,
@@ -369,7 +368,7 @@ impl TurnRequestProcessor {
         let mut body = Vec::new();
         let mut bytes = upstream.bytes;
         loop {
-            let chunk = tokio::time::timeout(RAW_RESPONSES_IDLE_TIMEOUT, bytes.next())
+            let chunk = tokio::time::timeout(idle_timeout, bytes.next())
                 .await
                 .map_err(|_| internal_error("raw Responses stream idle timeout"))?;
             let Some(chunk) = chunk else {

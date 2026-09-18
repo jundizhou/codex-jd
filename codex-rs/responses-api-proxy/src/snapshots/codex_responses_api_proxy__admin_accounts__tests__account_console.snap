@@ -1,0 +1,286 @@
+---
+source: responses-api-proxy/src/admin_accounts_tests.rs
+expression: "include_str!(\"admin_accounts.html\")"
+---
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Codex · 账号控制台</title>
+<style>
+:root{--ink:#202923;--muted:#768078;--line:#e4e8e2;--paper:#fff;--bg:#f5f6f2;--green:#24674f;--pale:#eaf4ed;--orange:#df8554;--danger:#b44038}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}button,input{font:inherit}button,a,input{ -webkit-tap-highlight-color:transparent}button{white-space:nowrap;cursor:pointer;border:1px solid var(--line);border-radius:9px;padding:10px 16px;background:white;color:var(--ink);font-weight:600;transition:background .15s,border-color .15s}button:hover{background:#f0f3ee;border-color:#bec9be}button:disabled{opacity:.45;cursor:not-allowed}button.primary{background:var(--green);border-color:var(--green);color:white}button.primary:hover{background:#1b523e}button.danger{color:var(--danger)}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #87b9a3;outline-offset:3px}a{color:var(--green);text-decoration:none}a:hover{text-decoration:underline}[hidden]{display:none!important}
+.sidebar{position:fixed;inset:0 auto 0 0;width:224px;background:#202e28;color:#d8e1da;padding:32px 22px;display:flex;flex-direction:column}.brand{display:flex;align-items:center;gap:12px;font-size:23px;font-weight:650;letter-spacing:-.8px;color:white}.brand-mark{display:grid;place-items:center;width:34px;height:34px;background:#c7dfce;border-radius:10px;color:#20392c;font:700 19px monospace}.brand small{font-size:10px;background:#3a4840;padding:3px 6px;border-radius:4px;color:#c3d0c7;letter-spacing:1px}.nav-label{font-size:10px;letter-spacing:2px;color:#92a598;margin:48px 14px 13px}.nav-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:8px;color:#e7eee9;background:#354a3e;font-weight:600}.nav-icon{font-size:18px;color:#b8d5c1}.sidebar-bottom{margin-top:auto;padding:20px 12px 0;border-top:1px solid #3c4a42;font-size:12px;color:#a1b2a6}.sidebar-bottom strong{display:block;color:#d7e1d9;font-weight:500;margin-bottom:4px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#6fba8d;margin-right:7px}
+.workspace{margin-left:224px;padding:32px 44px 48px;max-width:1600px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:32px;color:var(--muted);font-size:12px}.crumb{display:flex;align-items:center;gap:12px}.crumb b{color:var(--ink);font-weight:500}.eyebrow{color:var(--green);font-size:11px;letter-spacing:2px;font-weight:700;margin-bottom:9px}.page-heading{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:26px}h1{font-size:30px;letter-spacing:-1px;line-height:1.3;margin:0 0 10px;font-weight:650}h2{font-size:17px;line-height:1.4;margin:0;font-weight:650}p{margin:0}.subtitle,.hint{color:var(--muted);font-size:13px}.badge{display:inline-flex;align-items:center;gap:7px;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:500;white-space:nowrap;background:var(--pale);color:var(--green)}.badge.warning{background:#fff2dd;color:#946520}.badge.error{background:#fbece9;color:var(--danger)}.badge.neutral{background:#f0f2ee;color:#6c776d}.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.card{background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow:hidden}.card-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:24px 26px}.card-heading p{margin-top:5px}.section-icon{display:inline-grid;place-items:center;background:var(--pale);color:var(--green);border-radius:9px;width:34px;height:34px;font-size:18px;margin-right:10px;vertical-align:middle}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:24px}.metric{padding:20px 24px}.metric-label{color:var(--muted);font-size:12px;display:flex;justify-content:space-between;align-items:center}.metric-symbol{color:#8a9b8d;font-size:16px}.metric-value{font-size:34px;font-weight:600;line-height:1.3;margin:12px 0 5px;font-variant-numeric:tabular-nums;letter-spacing:-1px}.metric-value em{font-size:15px;color:#a1aaa2;font-style:normal;font-weight:400;letter-spacing:0}.metric-foot{font-size:11px;color:var(--muted)}.metric:first-child{border-top:3px solid var(--green);padding-top:18px}.metric:first-child .metric-value{color:var(--green)}.metric.attention .metric-value{color:#ac7333}.overview{display:grid;grid-template-columns:1.05fr 1fr;gap:0;margin-bottom:24px}.current-account{padding:25px 26px;border-right:1px solid var(--line);display:flex;align-items:center;gap:16px}.avatar{display:grid;place-items:center;width:46px;height:46px;flex-shrink:0;border-radius:13px;background:#f3eee4;color:#96764c;font-weight:700;font-size:18px}.account-label{color:var(--muted);font-size:12px}.account-name{font-weight:600;font-size:16px;margin-top:4px;overflow-wrap:anywhere}.concurrency{padding:22px 26px}.inline-form{display:flex;align-items:end;gap:10px}.inline-form label{flex:1}.concurrency input{width:100%}.hint{font-size:12px;line-height:1.7;margin-top:12px}label{display:block;font-size:12px;font-weight:600;color:#4d5a50}input{display:block;width:100%;min-width:0;margin-top:7px;border:1px solid #dce2da;border-radius:8px;padding:10px 12px;background:#fff;color:var(--ink);outline:none}input:focus{border-color:#77a58e;box-shadow:0 0 0 3px #eaf4ed}input::placeholder{color:#a0a8a0;font-weight:400}input[type=file]{padding:17px 13px;background:#f8faf6;border:1px dashed #cbd6c8;font-size:12px}input::file-selector-button{border:1px solid var(--line);border-radius:6px;background:white;color:var(--green);padding:5px 9px;margin-right:10px;cursor:pointer}.accounts-card{margin-bottom:24px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left}th{font-size:11px;color:#839084;font-weight:500;padding:11px 26px;background:#f8faf6;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}td{padding:18px 26px;border-bottom:1px solid #edf0ea;font-size:13px}td:first-child{font-weight:600}td:nth-child(2){color:var(--muted)}td:last-child{white-space:nowrap}td button{font-size:12px;padding:7px 11px;margin-right:7px}tr:last-child td{border-bottom:0}tr.active-row{background:#fbfdf9}.table-note{padding:15px 26px;background:#fcfdfb;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.empty{padding:35px!important;text-align:center;color:var(--muted);font-weight:400!important}.count{font-size:12px;color:var(--muted);font-weight:400;margin-left:10px}.add-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.form-body{padding:0 26px 26px}.form-body label+label{margin-top:16px}.form-body button{margin-top:18px}.steps{font-size:12px;color:var(--muted);line-height:1.9;margin:18px 0 0;padding-left:18px}.steps li{padding-left:4px;margin:5px 0}#linkResult{overflow-wrap:anywhere;margin-top:15px}#linkResult:empty{display:none}#linkResult a{display:block;background:var(--pale);border:1px solid #d6e8db;border-radius:8px;padding:12px;font-size:13px;font-weight:600}#pasteForm{margin-top:20px;padding-top:20px;border-top:1px solid var(--line)}#message:empty{display:none}#message{border:1px solid #cce2d2;background:var(--pale);color:var(--green);padding:12px 16px;border-radius:9px;margin-bottom:22px;white-space:pre-wrap;font-size:13px}#message.error{background:#fff0ed;border-color:#f0d2cc;color:var(--danger)}.login-card{max-width:470px;margin:60px auto}.login-card .form-body{padding-top:0}.login-card button{width:100%}.login-icon{width:48px;height:48px;border-radius:14px;background:var(--pale);display:grid;place-items:center;color:var(--green);font-size:24px;margin-bottom:20px}.login-card .card-heading{display:block;padding:30px 30px 22px}.login-card .form-body{padding:0 30px 30px}.footer{display:flex;justify-content:space-between;gap:12px;color:#98a095;font-size:11px;margin-top:26px}.save-button{white-space:nowrap}.summary-text{font-size:12px;color:var(--muted)}
+@media(min-width:1600px){.workspace{margin-right:auto}}
+@media(max-width:1180px){.sidebar{width:184px;padding:28px 16px}.workspace{margin-left:184px;padding:28px 24px}.overview{grid-template-columns:1fr}.current-account{border-right:0;border-bottom:1px solid var(--line)}th,td{padding:15px 18px}.metrics{gap:12px}.metric{padding:18px}.metric:first-child{padding-top:16px}}
+@media(max-width:800px){.sidebar{position:static;width:auto;padding:15px 20px;flex-direction:row;align-items:center;justify-content:space-between}.brand{font-size:20px}.brand-mark{width:30px;height:30px}.nav-label,.sidebar-bottom{display:none}.nav-item{padding:7px 12px;font-size:12px}.workspace{margin:0;padding:22px 18px 32px}.topbar{margin-bottom:25px}.page-heading{align-items:flex-start}h1{font-size:26px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.add-grid{grid-template-columns:1fr}.card-heading{padding:21px}.form-body{padding:0 21px 21px}.metric-value{font-size:30px}.current-account,.concurrency{padding:21px}.footer{flex-wrap:wrap}.login-card{margin:30px auto}.table-note{padding:15px 20px}}
+@media(max-width:600px){.accounts-card .card-heading{align-items:flex-start;flex-direction:column;gap:8px}.table-wrap{overflow:visible}table,tbody,tr,td{display:block}thead{display:none}tr{padding:15px 21px;border-top:1px solid var(--line)}td{padding:6px 0;border:0;overflow-wrap:anywhere}td:not(.empty){display:grid;grid-template-columns:76px minmax(0,1fr);align-items:center;gap:6px}td:not(.empty)::before{color:var(--muted);font-size:11px;font-weight:400}td:nth-child(1)::before{content:"账号名称"}td:nth-child(2)::before{content:"登录账号"}td:nth-child(3)::before{content:"状态"}td:last-child:not(.empty){display:flex;flex-wrap:wrap;margin-top:7px;padding-left:82px}td:last-child::before{content:none}.badge{justify-self:start}td button{margin:0}.empty{padding:15px 0!important}.topbar{font-size:10px}.page-heading{gap:12px}.page-heading button{font-size:12px;padding:9px 12px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<aside class="sidebar" aria-label="主导航">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">↗</span>codex <small>ADMIN</small></div>
+  <div class="nav-label">WORKSPACE</div>
+  <div class="nav-item" aria-current="page"><span class="nav-icon" aria-hidden="true">▦</span>账号控制台</div>
+  <div class="sidebar-bottom"><strong>Responses API Proxy</strong>账号与请求调度管理</div>
+</aside>
+<div class="workspace">
+  <header class="topbar"><div class="crumb">工作空间 <span>/</span> <b>账号管理</b></div><span>CODEX CONTROL PANEL</span></header>
+  <div class="page-heading"><div><div class="eyebrow">ACCOUNT MANAGEMENT</div><h1>账号控制台</h1><p class="subtitle">管理登录账号，掌握请求状态与并发分配。</p></div><button id="logout" hidden>退出登录 ↗</button></div>
+  <p id="message" role="status" aria-live="polite"></p>
+  <section id="login" class="card login-card" aria-labelledby="loginTitle">
+    <div class="card-heading"><div class="login-icon" aria-hidden="true">⌘</div><h2 id="loginTitle">连接你的工作空间</h2><p class="subtitle">输入 Worker Token，进入账号管理控制台。</p></div>
+    <form id="loginForm" class="form-body"><label for="token">Worker Token</label><input id="token" type="password" autocomplete="off" required placeholder="输入访问令牌"><button class="primary">进入控制台 →</button><p class="hint">令牌仅保存在当前浏览器会话中。</p></form>
+  </section>
+  <main id="console" hidden>
+    <div class="metrics" aria-label="请求运行指标">
+      <section class="card metric"><div class="metric-label">运行中<span class="metric-symbol" aria-hidden="true">↗</span></div><div class="metric-value" id="running">—</div><p class="metric-foot">正在处理的请求</p></section>
+      <section class="card metric"><div class="metric-label">等待队列<span class="metric-symbol" aria-hidden="true">≋</span></div><div class="metric-value" id="pending">—</div><p class="metric-foot">等待可用执行位置</p></section>
+      <section class="card metric" id="unknownMetric"><div class="metric-label">结果未知<span class="metric-symbol" aria-hidden="true">◇</span></div><div class="metric-value" id="quarantined">—</div><p class="metric-foot">需要确认完成状态</p></section>
+      <section class="card metric"><div class="metric-label">实际并发上限<span class="metric-symbol" aria-hidden="true">⊞</span></div><div class="metric-value"><span id="effective">—</span> <em>/ <span id="maximum">—</span></em></div><p class="metric-foot">实际可用 / 设置上限</p></section>
+    </div>
+    <section class="card overview" aria-label="当前账号与并发设置">
+      <div class="current-account"><div class="avatar" aria-hidden="true">C</div><div><div class="account-label">当前登录账号</div><div class="account-name" id="current">—</div><div id="summary" class="badge neutral">等待连接</div></div></div>
+      <div class="concurrency"><form id="limitForm" class="inline-form"><label for="limit">并发上限 <input id="limit" type="number" min="1" step="1" required></label><button class="primary save-button">保存设置</button></form><p class="hint">保存后立即生效。降低上限不会中断已有请求；限流时实际并发可能降低。</p></div>
+    </section>
+    <section class="card accounts-card" aria-labelledby="accountsTitle">
+      <div class="card-heading"><div><h2 id="accountsTitle">账号列表<span class="count" id="accountCount"></span></h2><p class="subtitle">集中管理账号与登录状态</p></div><span class="summary-text" id="updated">每 5 秒自动刷新</span></div>
+      <div class="table-wrap"><table><thead><tr><th scope="col">账号名称</th><th scope="col">登录账号</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="profiles"></tbody></table></div>
+      <p class="table-note">账号信息已脱敏。切换前需清空运行中、排队及结果未知的请求；当前账号不能删除。</p>
+    </section>
+    <div class="add-grid">
+      <section class="card" aria-labelledby="linkTitle"><div class="card-heading"><div><h2 id="linkTitle"><span class="section-icon" aria-hidden="true">↗</span>通过登录添加</h2><p class="subtitle">在浏览器中完成 ChatGPT 账号授权</p></div></div><div class="form-body">
+        <form id="linkForm"><label for="linkName">账号名称<input id="linkName" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" required placeholder="例如 personal-account"></label><button class="primary">生成登录链接 ↗</button></form>
+        <p id="linkResult"></p>
+        <form id="pasteForm" hidden><label for="callbackUrl">回调链接<input id="callbackUrl" required placeholder="http://localhost:1455/auth/callback?code=…" spellcheck="false"></label><button class="primary">提交并保存账号</button></form>
+        <ol class="steps"><li>生成链接后，在新窗口完成登录。</li><li>跳转到 localhost 后，即使提示无法访问，也请复制地址栏完整链接。</li><li>将链接粘贴至回调输入框，提交保存。</li></ol><p class="hint">重新生成链接会作废上一次未完成的登录。</p>
+      </div></section>
+      <section class="card" aria-labelledby="importTitle"><div class="card-heading"><div><h2 id="importTitle"><span class="section-icon" aria-hidden="true">↑</span>导入已有账号</h2><p class="subtitle">使用已登录账号的认证文件快速添加</p></div></div><div class="form-body">
+        <form id="addForm"><label for="name">账号名称<input id="name" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" required placeholder="例如 work-account"></label><label for="auth">认证文件<input id="auth" type="file" accept=".json,application/json" required></label><button>上传并添加 ↑</button></form>
+        <p class="hint">支持 auth.json，不超过 64 KiB。文件内容不会在页面展示。添加成功后，可在账号列表中设为当前账号。</p>
+      </div></section>
+    </div>
+    <footer class="footer"><span>Codex · 账号与并发管理</span><span>账号名称支持英文字母、数字、短横线和下划线</span></footer>
+  </main>
+</div>
+<script>
+let token = sessionStorage.getItem('codex_worker_token') || '',
+  busy = false;
+const el = (id) => document.getElementById(id);
+function setBusy(value) {
+  busy = value;
+  document
+    .querySelectorAll('#console button, #logout')
+    .forEach((button) => (button.disabled = value || button.dataset.locked === 'true'));
+}
+function message(text, error = false) {
+  el('message').textContent = text;
+  el('message').className = error ? 'error' : '';
+}
+async function api(path, body) {
+  const response = await fetch('/admin/api/' + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (response.status === 401) {
+    logout();
+    throw Error('Token 无效或已失效，请重新登录');
+  }
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error || '请求失败');
+  return data;
+}
+function logout() {
+  token = '';
+  sessionStorage.removeItem('codex_worker_token');
+  el('console').hidden = true;
+  el('logout').hidden = true;
+  el('login').hidden = false;
+  el('token').value = '';
+  el('profiles').replaceChildren();
+  el('summary').textContent = '';
+  el('pasteForm').hidden = true;
+  el('callbackUrl').value = '';
+  el('linkResult').replaceChildren();
+  el('addForm').reset();
+  el('linkForm').reset();
+  message('');
+}
+async function load() {
+  const data = await api('accounts'),
+    q = data.queue;
+  el('login').hidden = true;
+  el('console').hidden = false;
+  el('logout').hidden = false;
+  const states = q.paused
+    ? '已暂停'
+    : q.account_unavailable
+      ? '账号认证或额度不可用'
+      : q.cooldown_seconds
+        ? '限流冷却中'
+        : '运行中';
+  el('summary').textContent = states;
+  el('summary').className =
+    'badge' + (q.account_unavailable ? ' error' : q.paused || q.cooldown_seconds ? ' warning' : '');
+  el('current').textContent = data.current || '未知';
+  for (const key of ['running', 'pending', 'quarantined']) el(key).textContent = q[key];
+  el('unknownMetric').classList.toggle('attention', q.quarantined > 0);
+  el('effective').textContent = q.effective_max_running;
+  el('maximum').textContent = q.max_running;
+  el('accountCount').textContent = `${data.profiles.length} 个账号`;
+  el('updated').textContent =
+    '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + ' · 每 5 秒刷新';
+  el('limit').max = data.capacity;
+  if (document.activeElement !== el('limit')) el('limit').value = q.max_running;
+  const rows = [];
+  for (const p of data.profiles) {
+    const row = document.createElement('tr');
+    row.classList.toggle('active-row', p.active);
+    for (const text of [
+      p.name,
+      p.account || '—',
+      p.active ? '当前使用' : p.valid ? '已保存 · 未验证' : '认证文件无效',
+    ]) {
+      const cell = document.createElement('td');
+      if (row.children.length === 2) {
+        const badge = document.createElement('span');
+        badge.className = 'badge' + (p.active ? '' : p.valid ? ' neutral' : ' error');
+        badge.textContent = text;
+        cell.append(badge);
+      } else {
+        cell.textContent = text;
+      }
+      row.append(cell);
+    }
+    const cell = document.createElement('td');
+    for (const [label, action] of [
+      ['设为当前账号', 'switch'],
+      ['删除', 'delete'],
+    ]) {
+      const button = document.createElement('button');
+      button.textContent = p.active && action === 'switch' ? '使用中' : label;
+      button.className = action === 'delete' ? 'danger' : '';
+      button.dataset.locked = String(p.active || !p.valid);
+      button.disabled = p.active || !p.valid || busy;
+      button.onclick = () => {
+        if (confirm(`${label}「${p.name}」？`)) mutate(action, { profile: p.name });
+      };
+      cell.append(button);
+    }
+    row.append(cell);
+    rows.push(row);
+  }
+  el('profiles').replaceChildren(...rows);
+  if (!rows.length) {
+    const row = document.createElement('tr'),
+      cell = document.createElement('td');
+    cell.colSpan = 4;
+    cell.className = 'empty';
+    cell.textContent =
+      '当前登录尚未保存到账号列表；可上传其 auth.json 保存，首次切换时也会自动备份。';
+    row.append(cell);
+    el('profiles').append(row);
+  }
+}
+async function mutate(action, body) {
+  if (busy) return;
+  setBusy(true);
+  try {
+    await api(action, body);
+    message('操作成功');
+    if (action === 'add') el('addForm').reset();
+    await load();
+  } catch (error) {
+    message(error.message, true);
+  } finally {
+    setBusy(false);
+    try {
+      await load();
+    } catch (error) {
+      message(error.message, true);
+    }
+  }
+}
+el('loginForm').onsubmit = async (event) => {
+  event.preventDefault();
+  token = el('token').value.trim();
+  try {
+    await load();
+    sessionStorage.setItem('codex_worker_token', token);
+    el('token').value = '';
+    message('已登录');
+  } catch (error) {
+    message(error.message, true);
+  }
+};
+el('logout').onclick = logout;
+el('limitForm').onsubmit = (event) => {
+  event.preventDefault();
+  mutate('concurrency', { limit: Number(el('limit').value) });
+};
+el('addForm').onsubmit = async (event) => {
+  event.preventDefault();
+  const file = el('auth').files[0];
+  if (!file || file.size > 65536) {
+    message('请选择不超过 64 KiB 的 auth.json', true);
+    return;
+  }
+  try {
+    await mutate('add', { profile: el('name').value, auth: JSON.parse(await file.text()) });
+  } catch (error) {
+    message('无法读取 JSON 文件：' + error.message, true);
+  }
+};
+el('linkForm').onsubmit = async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  setBusy(true);
+  try {
+    const data = await api('login-start', { profile: el('linkName').value });
+    const link = document.createElement('a');
+    link.href = data.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = '打开 ChatGPT 登录页面 ↗';
+    el('linkResult').replaceChildren(link);
+    el('pasteForm').hidden = false;
+    el('callbackUrl').value = '';
+    message('已生成登录链接：请在浏览器打开并完成登录，然后把跳转后的地址栏链接粘贴到下方提交');
+  } catch (error) {
+    message(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+};
+el('pasteForm').onsubmit = async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  setBusy(true);
+  try {
+    await api('login-callback', {
+      profile: el('linkName').value,
+      url: el('callbackUrl').value.trim(),
+    });
+    message(`账号「${el('linkName').value}」登录成功并已保存`);
+    el('pasteForm').hidden = true;
+    el('linkResult').replaceChildren();
+    el('linkForm').reset();
+    await load();
+  } catch (error) {
+    message(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+};
+if (token) load().catch((error) => message(error.message, true));
+setInterval(() => {
+  if (token && !busy) load().catch((error) => message(error.message, true));
+}, 5000);
+</script>
+</body>
+</html>

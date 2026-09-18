@@ -31,10 +31,22 @@ if [[ ! "$token" =~ ^[a-f0-9]{64}$ ]]; then
     exit 1
 fi
 socket=/data/app-server.sock
+printf 'header = "Authorization: Bearer %s"\n' "$token" > /tmp/worker-queue-curl.conf
 rm -f "$socket"
 pids=()
 cleanup() {
     trap - EXIT TERM INT
+    if [[ "${CODEX_WORKER_QUEUE:-0}" == 1 ]] && ((${#pids[@]} >= 2)); then
+        curl --noproxy '*' --config /tmp/worker-queue-curl.conf --silent --max-time 2 \
+            --request POST --output /dev/null http://127.0.0.1:8787/internal/queue/pause || true
+        stop_deadline=$((SECONDS + 20))
+        while ((SECONDS < stop_deadline)); do
+            queue_status=$(curl --noproxy '*' --config /tmp/worker-queue-curl.conf --silent --max-time 1 \
+                http://127.0.0.1:8787/internal/queue/status) || break
+            [[ "$queue_status" == *'"running":0'* && "$queue_status" == *'"pending":0'* ]] && break
+            sleep 1
+        done
+    fi
     if ((${#pids[@]})); then
         kill "${pids[@]}" 2>/dev/null || true
         wait "${pids[@]}" 2>/dev/null || true
@@ -52,8 +64,25 @@ for ((i=0; i<90; i++)); do
     sleep 1
 done
 [[ -S "$socket" ]] || { echo 'app-server startup timed out.' >&2; exit 1; }
-codex-responses-api-proxy --port 8787 --app-server-socket "$socket" &
+queue_args=()
+if [[ "${CODEX_WORKER_QUEUE:-0}" == 1 ]]; then
+    if [[ "${CODEX_WORKER_QUEUE_AUTO_RECOVER:-0}" == 1 ]]; then
+        queue_args+=(--queue-auto-recover)
+    fi
+    queue_args+=(--queue --queue-state /data/queue-state.json
+        --queue-max-running "${CODEX_WORKER_QUEUE_MAX_RUNNING:-2}"
+        --queue-conversation-gap-ms "${CODEX_WORKER_QUEUE_GAP_MS:-800}"
+        --queue-user-gap-ms "${CODEX_WORKER_QUEUE_USER_GAP_MS:-1500}"
+        --queue-tool-gap-ms "${CODEX_WORKER_QUEUE_TOOL_GAP_MS:-300}"
+        --queue-start-gap-ms "${CODEX_WORKER_QUEUE_START_GAP_MS:-300}"
+        --queue-idle-ttl-secs "${CODEX_WORKER_QUEUE_IDLE_TTL_SECS:-900}")
+fi
+CODEX_WORKER_API_KEY="$token" codex-responses-api-proxy "${queue_args[@]}" --port 8787 --app-server-socket "$socket" &
 pids+=("$!")
+if [[ "${CODEX_WORKER_AUTO_SWITCH:-0}" == 1 && "${CODEX_WORKER_QUEUE:-0}" == 1 ]]; then
+    /usr/local/bin/account-switcher.sh &
+    pids+=("$!")
+fi
 # Gate readiness on the proxy listener without requiring an upstream model call.
 for ((i=0; i<90; i++)); do
     if curl --noproxy '*' --silent --output /dev/null http://127.0.0.1:8787/; then
@@ -80,13 +109,21 @@ http {
     server {
         listen 8080;
         client_max_body_size 32m;
+        client_body_timeout 20s;
+        send_timeout 30s;
         location = /healthz { return 200 'ok'; }
+        location = /admin/accounts {
+            limit_except GET { deny all; }
+            proxy_pass http://127.0.0.1:8787;
+            proxy_set_header Authorization "";
+            add_header Cache-Control "no-store" always;
+        }
         location / {
             if (\$authorized = 0) { return 401; }
             proxy_pass http://127.0.0.1:8787;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
-            proxy_set_header Authorization "";
+            proxy_set_header Authorization \$http_authorization;
             proxy_buffering off;
             proxy_request_buffering off;
             proxy_read_timeout 3600s;

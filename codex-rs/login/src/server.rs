@@ -57,7 +57,7 @@ use tracing::info;
 use tracing::warn;
 
 pub(super) const DEFAULT_ISSUER: &str = "https://auth.openai.com";
-const DEFAULT_PORT: u16 = 1455;
+pub(crate) const DEFAULT_PORT: u16 = 1455;
 // Keep in sync with the Codex CLI Hydra redirect URI allow-list.
 const FALLBACK_PORT: u16 = 1457;
 static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
@@ -573,7 +573,7 @@ fn send_response_with_disconnect(
     writer.flush()
 }
 
-fn build_authorize_url(
+pub(crate) fn build_authorize_url(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -611,7 +611,7 @@ fn build_authorize_url(
     format!("{issuer}/oauth/authorize?{qs}")
 }
 
-fn generate_state() -> String {
+pub(crate) fn generate_state() -> String {
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)

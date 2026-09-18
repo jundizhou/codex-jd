@@ -2,6 +2,8 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadModelIdentityListParams;
 use codex_app_server_protocol::ThreadModelIdentityListResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -10,14 +12,106 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
+use std::time::Duration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test]
+async fn raw_turn_start_uses_provider_timeout_without_retrying() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_provider_config("supports_websockets = false\nstream_idle_timeout_ms = 1000")
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+    let request_id = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            raw_responses: Some(json!({"model":"mock-model", "input":[], "stream":true})),
+            ..Default::default()
+        })
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert_eq!(
+        error.error,
+        JSONRPCErrorError {
+            code: -32603,
+            message: "raw Responses request timed out".into(),
+            data: None,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_stream_uses_provider_timeout_between_chunks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let (gate, blocked) = tokio::sync::oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("stalled")]),
+        },
+        StreamingSseChunk {
+            gate: Some(blocked),
+            body: responses::sse(vec![responses::ev_completed("stalled")]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri())
+        .with_provider_config("supports_websockets = false\nstream_idle_timeout_ms = 500")
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+    let request_id = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            raw_responses: Some(json!({"model":"mock-model", "input":[], "stream":true})),
+            raw_responses_stream: true,
+            ..Default::default()
+        })
+        .await?;
+    let error = app
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert_eq!(
+        error.error,
+        JSONRPCErrorError {
+            code: -32603,
+            message: "raw Responses stream idle timeout".into(),
+            data: None,
+        }
+    );
+    assert_eq!(server.requests().await.len(), 1);
+    drop(gate);
+    server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test]
 async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
@@ -35,7 +129,8 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
                 .insert_header("content-type", "text/event-stream")
                 .insert_header("x-codex-turn-state", "upstream-next-token")
                 .insert_header("set-cookie", "must-not-leak")
-                .set_body_string(upstream_body.clone()),
+                .insert_header("retry-after", "120")
+                .set_body_raw(upstream_body.as_bytes().to_vec(), "text/event-stream"),
         )
         .expect(1)
         .mount(&server)
@@ -127,10 +222,14 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     assert_eq!(response.raw_response_body, Some(upstream_body));
     assert_eq!(
         response.raw_response_headers,
-        Some(HashMap::from([(
-            "x-codex-turn-state".to_string(),
-            "upstream-next-token".to_string()
-        ),]))
+        Some(HashMap::from([
+            (
+                "x-codex-turn-state".to_string(),
+                "upstream-next-token".to_string()
+            ),
+            ("retry-after".to_string(), "120".to_string()),
+            ("content-type".to_string(), "text/event-stream".to_string()),
+        ]))
     );
 
     let mut expected = raw_request;
@@ -180,5 +279,64 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
             .contains(env!("CARGO_PKG_VERSION"))
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_rate_limit_preserves_retry_hint_and_never_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let body = r#"{"error":{"type":"rate_limit_exceeded"}}"#;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .set_body_raw(body.as_bytes().to_vec(), "application/json")
+                .insert_header("retry-after", "3600")
+                .insert_header("set-cookie", "private"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = app
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".into()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let response: TurnStartResponse = app
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.to_string(),
+                raw_responses: Some(json!({"model":"mock-model", "input":[], "stream":false})),
+                ..Default::default()
+            },
+        })
+        .await?;
+    assert_eq!(
+        (
+            response.raw_response_status,
+            response.raw_response_body,
+            response.raw_response_headers
+        ),
+        (
+            Some(429),
+            Some(body.to_string()),
+            Some(HashMap::from([
+                ("retry-after".into(), "3600".into()),
+                ("content-type".into(), "application/json".into()),
+            ]))
+        )
+    );
     Ok(())
 }

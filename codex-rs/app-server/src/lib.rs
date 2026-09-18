@@ -94,6 +94,7 @@ mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
 mod attestation;
+mod auth_file_watcher;
 mod auth_mode;
 mod bespoke_event_handling;
 mod code_mode_host;
@@ -759,6 +760,15 @@ pub async fn run_main_with_transport_options(
         AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
             .await
             .map_err(std::io::Error::other)?;
+
+    auth_file_watcher::spawn(
+        codex_home.join("auth.json").to_path_buf(),
+        Arc::clone(&auth_manager),
+        Arc::new(config_manager.clone()),
+        config.chatgpt_base_url.clone(),
+        config.http_client_factory(),
+        transport_shutdown_token.clone(),
+    );
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested

@@ -6,7 +6,6 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -15,7 +14,6 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
 use tiny_http::Header;
@@ -27,61 +25,32 @@ use tiny_http::StatusCode;
 
 mod affinity;
 mod app_server_reader;
+mod args;
+pub use args::Args;
+mod admin_accounts;
+mod admin_login;
 mod auth;
+mod conversations;
 mod dump;
 mod identity;
 mod models;
+mod queue_http;
+mod queue_signals;
+mod queue_store;
+mod queue_throttle;
 mod raw_response_stream;
 mod rewrite;
+mod scheduler;
 mod session_pool;
 mod stream_http;
 use affinity::key_for_request;
 use app_server_reader::AppServerIdentityClient;
+use app_server_reader::IdentityMode;
 use app_server_reader::resolve_socket_arg;
 use dump::ExchangeDumper;
 use identity::SessionIdentity;
 use rewrite::rewrite_body;
 use session_pool::SessionPool;
-
-/// CLI arguments for the proxy.
-#[derive(Debug, Clone, Parser)]
-#[command(name = "responses-api-proxy", about = "Minimal OpenAI responses proxy")]
-pub struct Args {
-    /// Address to listen on. Defaults to loopback for local-only operation.
-    #[arg(long, default_value = "127.0.0.1")]
-    pub listen_address: IpAddr,
-
-    /// Port to listen on. If not set, an ephemeral port is used.
-    #[arg(long)]
-    pub port: Option<u16>,
-
-    /// Path to a JSON file to write startup info (single line). Includes {"port": <u16>}.
-    #[arg(long, value_name = "FILE")]
-    pub server_info: Option<PathBuf>,
-
-    /// Enable HTTP shutdown endpoint at GET /shutdown
-    #[arg(long)]
-    pub http_shutdown: bool,
-
-    /// Directory where request/response dumps should be written as JSON.
-    #[arg(long, value_name = "DIR")]
-    pub dump_dir: Option<PathBuf>,
-
-    /// Absolute path to the local app-server control socket.
-    #[arg(long, value_name = "PATH")]
-    pub app_server_socket: Option<PathBuf>,
-
-    /// Shared secret accepted in the inbound `Authorization: Bearer` header.
-    /// When omitted, authentication is disabled for backwards compatibility.
-    #[arg(long, value_name = "SECRET")]
-    pub worker_api_key: Option<String>,
-
-    /// Number of app-server sessions in the forwarding pool.
-    /// Falls back to CODEX_SESSION_POOL_SIZE, then to
-    /// [session_pool::DEFAULT_SESSION_POOL_SIZE].
-    #[arg(long, value_name = "N")]
-    pub session_pool_size: Option<usize>,
-}
 
 #[derive(Serialize)]
 struct ServerInfo {
@@ -92,11 +61,16 @@ struct ServerInfo {
 struct ForwardConfig {
     identity_client: Arc<AppServerIdentityClient>,
     worker_api_key: Option<String>,
+    queue: Option<Arc<scheduler::Scheduler>>,
+    account_label: String,
+    admin_capacity: usize,
+    profile_dir: Option<std::path::PathBuf>,
+    auth_path: std::path::PathBuf,
 }
 
 static PROXY_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-fn resolve_session_pool_size(cli_value: Option<usize>) -> Result<usize> {
+fn resolve_session_pool_size(cli_value: Option<usize>, default_size: usize) -> Result<usize> {
     let size = match cli_value {
         Some(size) => size,
         None => match std::env::var("CODEX_SESSION_POOL_SIZE") {
@@ -104,35 +78,129 @@ fn resolve_session_pool_size(cli_value: Option<usize>) -> Result<usize> {
                 .trim()
                 .parse::<usize>()
                 .with_context(|| format!("invalid CODEX_SESSION_POOL_SIZE: {raw}"))?,
-            Err(_) => session_pool::DEFAULT_SESSION_POOL_SIZE,
+            Err(_) => default_size,
         },
     };
     anyhow::ensure!(size >= 1, "session pool size must be at least 1");
     Ok(size)
 }
 
+fn configured_account_label() -> String {
+    let Ok(home) = codex_utils_home_dir::find_codex_home() else {
+        return "configured account".to_string();
+    };
+    let path = home.as_path().join("auth.json");
+    let Ok(contents) = fs::read_to_string(path) else {
+        return "configured account".to_string();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+        return "configured account".to_string();
+    };
+    let Some(account) = value
+        .pointer("/tokens/account_id")
+        .and_then(Value::as_str)
+        .filter(|account| !account.is_empty())
+    else {
+        return "configured account".to_string();
+    };
+    admin_accounts::masked_account(account)
+}
+
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
-    let session_pool_size = resolve_session_pool_size(args.session_pool_size)?;
-    let app_server_socket = resolve_socket_arg(args.app_server_socket.clone())?;
-    let (identity_client, identities) =
-        AppServerIdentityClient::start(app_server_socket.clone(), session_pool_size).with_context(
-            || {
-                format!(
-                    "failed to create proxy sessions through {}",
-                    app_server_socket.display()
-                )
-            },
-        )?;
-    let session_pool = Arc::new(SessionPool::new(identities)?);
-    let identity_client = Arc::new(identity_client);
-
+    let default_size = if args.queue {
+        32
+    } else {
+        session_pool::DEFAULT_SESSION_POOL_SIZE
+    };
+    let session_pool_size = resolve_session_pool_size(args.session_pool_size, default_size)?;
+    anyhow::ensure!(
+        !args.queue || session_pool_size <= 256,
+        "queue mode supports at most 256 identities"
+    );
+    anyhow::ensure!(
+        !args.queue || usize::from(args.queue_max_running) <= session_pool_size,
+        "queue concurrency exceeds available session identities"
+    );
+    let auth_path = codex_utils_home_dir::find_codex_home()?
+        .as_path()
+        .join("auth.json");
+    let admin_dir = std::env::var_os("CODEX_ACCOUNT_PROFILES_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| auth_path.with_file_name("accounts"));
+    let admin = admin_accounts::Store::new(&admin_dir, &auth_path, session_pool_size);
+    let maximum = admin.limit(usize::from(args.queue_max_running))?;
     let worker_api_key = args
         .worker_api_key
         .or_else(|| std::env::var("CODEX_WORKER_API_KEY").ok());
+    anyhow::ensure!(
+        !args.queue || worker_api_key.as_ref().is_some_and(|key| !key.is_empty()),
+        "queue mode requires a worker API key"
+    );
+    let queue_path = if args.queue {
+        Some(
+            args.queue_state.clone().unwrap_or(
+                codex_utils_home_dir::find_codex_home()?
+                    .as_path()
+                    .join("responses-queue.json"),
+            ),
+        )
+    } else {
+        None
+    };
+    let journal = queue_store::Journal::open(queue_path.as_deref())?;
+    let mode = match &queue_path {
+        Some(path) => IdentityMode::Durable(conversations::Conversations::open(
+            path.with_extension("conversations.json"),
+            codex_utils_home_dir::find_codex_home()?
+                .as_path()
+                .join("auth.json"),
+            session_pool_size,
+            std::time::Duration::from_secs(args.queue_idle_ttl_secs),
+            &journal.unknown_conversations(),
+        )?),
+        None => IdentityMode::Pool(session_pool_size),
+    };
+    let app_server_socket = resolve_socket_arg(args.app_server_socket.clone())?;
+    let (identity_client, identities) = AppServerIdentityClient::start(app_server_socket, mode)
+        .context("starting proxy identity manager")?;
+    let queue = if args.queue {
+        Some(scheduler::Scheduler::new(
+            scheduler::Config {
+                automatic_recovery: args.queue_auto_recover,
+                max_running: maximum,
+                gap: std::time::Duration::from_millis(args.queue_conversation_gap_ms),
+                user_gap: std::time::Duration::from_millis(args.queue_user_gap_ms),
+                tool_gap: std::time::Duration::from_millis(args.queue_tool_gap_ms),
+                idle_ttl: std::time::Duration::from_secs(args.queue_idle_ttl_secs),
+                start_gap: std::time::Duration::from_millis(args.queue_start_gap_ms),
+                timeout: scheduler::MAX_QUEUE_WAIT,
+            },
+            journal,
+        ))
+    } else {
+        None
+    };
+    let session_pool = if args.queue {
+        None
+    } else {
+        Some(Arc::new(SessionPool::new(identities)?))
+    };
+    let identity_client = Arc::new(identity_client);
+    if args.queue_auto_recover
+        && let Some(queue) = &queue
+    {
+        queue.start_recovery(&identity_client)?;
+    }
+
     let forward_config = Arc::new(ForwardConfig {
         identity_client,
         worker_api_key,
+        queue,
+        account_label: configured_account_label(),
+        profile_dir: Some(admin_dir),
+        auth_path,
+        admin_capacity: session_pool_size,
     });
     let dump_dir = args
         .dump_dir
@@ -151,10 +219,56 @@ pub fn run_main(args: Args) -> Result<()> {
 
     let http_shutdown = args.http_shutdown;
     for request in server.incoming_requests() {
+        let received = Instant::now();
+        let (request, admission) = if let Some(queue) = &forward_config.queue {
+            if request.method() == &Method::Get && request.url() == "/healthz" {
+                let _ = request.respond(Response::from_string("ok\n"));
+                continue;
+            }
+            if request.method() == &Method::Get && request.url() == "/admin/accounts" {
+                let _ = queue_http::control(
+                    queue,
+                    request,
+                    &forward_config.account_label,
+                    forward_config.profile_dir.as_deref(),
+                    &forward_config.auth_path,
+                    forward_config.admin_capacity,
+                );
+                continue;
+            }
+            if !auth::is_authorized(request.headers(), forward_config.worker_api_key.as_deref()) {
+                let _ = request.respond(Response::new_empty(StatusCode(401)));
+                continue;
+            }
+            if request.url() == "/readyz" && !forward_config.identity_client.is_available() {
+                queue_http::error(request, scheduler::Rejection::IdentityUnavailable);
+                continue;
+            }
+            let Some(request) = queue_http::control(
+                queue,
+                request,
+                &forward_config.account_label,
+                forward_config.profile_dir.as_deref(),
+                &forward_config.auth_path,
+                forward_config.admin_capacity,
+            ) else {
+                continue;
+            };
+            match queue_http::admission(queue, &request) {
+                Ok(admission) => (request, Some(admission)),
+                Err(error) => {
+                    queue_http::error(request, error);
+                    continue;
+                }
+            }
+        } else {
+            (request, None)
+        };
         let forward_config = forward_config.clone();
         let dump_dir = dump_dir.clone();
         let session_pool = session_pool.clone();
         std::thread::spawn(move || {
+            let _admission = admission;
             if http_shutdown && request.method() == &Method::Get && request.url() == "/shutdown" {
                 if auth::is_authorized(request.headers(), forward_config.worker_api_key.as_deref())
                 {
@@ -172,9 +286,13 @@ pub fn run_main(args: Args) -> Result<()> {
                 return;
             }
 
-            if let Err(e) =
-                forward_request(&forward_config, dump_dir.as_deref(), &session_pool, request)
-            {
+            if let Err(e) = forward_request(
+                &forward_config,
+                dump_dir.as_deref(),
+                session_pool.as_deref(),
+                request,
+                received,
+            ) {
                 eprintln!("forwarding error: {e}");
             }
         });
@@ -211,8 +329,9 @@ fn write_server_info(path: &Path, port: u16) -> Result<()> {
 fn forward_request(
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
-    session_pool: &SessionPool,
+    session_pool: Option<&SessionPool>,
     mut req: Request,
+    received: Instant,
 ) -> Result<()> {
     let method = req.method().clone();
     let url = req.url();
@@ -247,10 +366,70 @@ fn forward_request(
     }
 
     let mut body = Vec::new();
+    if let Some(queue) = &config.queue {
+        let reserved = req.body_length().unwrap_or(scheduler::MAX_BODY);
+        req.as_reader()
+            .take((reserved + 1) as u64)
+            .read_to_end(&mut body)?;
+        if body.len() > reserved {
+            queue_http::error(req, scheduler::Rejection::TooLarge);
+            return Ok(());
+        }
+        let fallback = format!(
+            "{}-{}",
+            std::process::id(),
+            PROXY_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        let pending = match queue_http::pending(&req, &body, received, fallback) {
+            Ok(pending) => pending,
+            Err(error) => {
+                req.respond(Response::new_empty(StatusCode(400)))?;
+                return Err(error);
+            }
+        };
+        let key = pending.key.digest();
+        let routing = req
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("x-codex-turn-state"))
+            .map(|header| header.value.as_str());
+        let continuation =
+            conversations::Continuation::from_request(&serde_json::from_slice(&body)?, routing);
+        let lease = match queue.acquire(pending) {
+            Ok(lease) => lease,
+            Err(error) => {
+                queue_http::error(req, error);
+                return Ok(());
+            }
+        };
+        let identity = match config
+            .identity_client
+            .acquire_conversation(key, continuation)
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                let rejection = error
+                    .downcast_ref::<scheduler::Rejection>()
+                    .copied()
+                    .unwrap_or(scheduler::Rejection::IdentityUnavailable);
+                queue_http::error(req, rejection);
+                return Err(error.context("acquiring durable conversation"));
+            }
+        };
+        let result =
+            forward_request_with_identity(config, dump_dir, &identity, req, body, Some(&lease));
+        lease.settle();
+        config
+            .identity_client
+            .release_conversation(identity, lease.identity_outcome())?;
+        return result;
+    }
     req.as_reader().read_to_end(&mut body)?;
     let affinity_key = key_for_request(&body);
+    let session_pool = session_pool.context("nonqueue session pool missing")?;
     let identity = session_pool.acquire(affinity_key.as_deref());
-    let result = forward_request_with_identity(config, dump_dir, &identity, req, body);
+    let result =
+        forward_request_with_identity(config, dump_dir, &identity, req, body, /*lease*/ None);
     session_pool.release(identity);
     result
 }
@@ -261,17 +440,26 @@ fn forward_request_with_identity(
     identity: &SessionIdentity,
     req: Request,
     body: Vec<u8>,
+    lease: Option<&scheduler::Lease>,
 ) -> Result<()> {
     let request_id = PROXY_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let started_at = Instant::now();
     let effective_identity = match config.identity_client.read_identity(&identity.thread_id) {
         Ok(Some(identity)) => identity,
         Ok(None) => {
-            req.respond(Response::new_empty(StatusCode(503)))?;
+            if lease.is_some() {
+                queue_http::error(req, scheduler::Rejection::IdentityUnavailable);
+            } else {
+                req.respond(Response::new_empty(StatusCode(503)))?;
+            }
             anyhow::bail!("assigned app-server thread is no longer loaded");
         }
         Err(error) => {
-            req.respond(Response::new_empty(StatusCode(503)))?;
+            if lease.is_some() {
+                queue_http::error(req, scheduler::Rejection::IdentityUnavailable);
+            } else {
+                req.respond(Response::new_empty(StatusCode(503)))?;
+            }
             return Err(error.context("refreshing assigned app-server thread identity"));
         }
     };
@@ -316,29 +504,42 @@ fn forward_request_with_identity(
         &effective_identity.thread_id,
         request_value,
         headers,
+        lease.map(|lease| lease.dispatch.clone()),
     ) {
         Ok(result) => result,
         Err(error) => {
+            if let Some(rejection) = error.downcast_ref::<scheduler::Rejection>() {
+                queue_http::error(req, *rejection);
+                return Err(error);
+            }
             req.respond(Response::new_empty(StatusCode(502)))?;
             return Err(error.context("calling app-server raw Responses"));
         }
     };
     let status_code = result.status;
     let status = StatusCode(status_code);
-    let content_type = if body_contains_stream(&rewritten.body) {
-        "text/event-stream"
-    } else {
-        "application/json"
-    };
+    let content_type = result
+        .headers
+        .get("content-type")
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if status_code < 400 && body_contains_stream(&rewritten.body) {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        });
     let mut response_headers = vec![
         Header::from_bytes(b"content-type", content_type.as_bytes())
             .map_err(|_| anyhow!("invalid content-type header"))?,
     ];
-    if let Some(state) = result.headers.get("x-codex-turn-state") {
-        response_headers.push(
-            Header::from_bytes(b"x-codex-turn-state", state.as_bytes())
-                .map_err(|_| anyhow!("invalid upstream routing header"))?,
-        );
+    for name in ["x-codex-turn-state", "retry-after"] {
+        if let Some(state) = result.headers.get(name) {
+            response_headers.push(
+                Header::from_bytes(name.as_bytes(), state.as_bytes())
+                    .map_err(|_| anyhow!("invalid upstream routing header"))?,
+            );
+        }
     }
     let response_body = result.body;
     let response_body: Box<dyn Read + Send> = if let Some(exchange_dump) = exchange_dump {

@@ -44,12 +44,22 @@ pub(super) fn request_headers(
 }
 
 pub(super) fn response_headers(headers: &HeaderMap) -> HashMap<String, String> {
-    headers
-        .get("x-codex-turn-state")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.len() <= 8192)
-        .map(|value| HashMap::from([("x-codex-turn-state".to_string(), value.to_string())]))
-        .unwrap_or_default()
+    ["x-codex-turn-state", "retry-after", "content-type"]
+        .into_iter()
+        .filter_map(|name| {
+            let values: Vec<_> = headers.get_all(name).iter().collect();
+            if values.len() != 1 {
+                return None;
+            }
+            let value = values[0].to_str().ok()?;
+            let limit = if name == "x-codex-turn-state" {
+                8192
+            } else {
+                1024
+            };
+            (value.len() <= limit).then(|| (name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

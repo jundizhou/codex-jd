@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -25,7 +27,21 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+use crate::conversations::Continuation;
+use crate::conversations::Conversations;
 use crate::identity::SessionIdentity;
+
+#[derive(Debug, Deserialize)]
+pub(super) struct RpcError {
+    pub code: i64,
+    pub message: String,
+}
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for RpcError {}
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -55,38 +71,123 @@ struct IdentityPage {
     next_cursor: Option<String>,
 }
 
+pub(crate) enum IdentityMode {
+    Pool(usize),
+    Durable(Conversations),
+}
+
 enum Command {
+    RecoverConversation {
+        key: String,
+        response: mpsc::Sender<Result<()>>,
+    },
+    AcquireConversation {
+        key: String,
+        continuation: Continuation,
+        response: mpsc::Sender<Result<SessionIdentity>>,
+    },
+    ReleaseConversation {
+        identity: SessionIdentity,
+        outcome: crate::conversations::Outcome,
+        response: mpsc::Sender<Result<()>>,
+    },
     ReadIdentity {
         thread_id: String,
         response: mpsc::Sender<Result<Option<SessionIdentity>, String>>,
     },
 }
 
-/// Owns the app-server connection that keeps the proxy's five ephemeral threads loaded.
+/// Owns the app-server connection and the currently loaded identity threads.
 pub(crate) struct AppServerIdentityClient {
     command_tx: tokio_mpsc::UnboundedSender<Command>,
     socket: PathBuf,
+    alive: Arc<AtomicBool>,
 }
 
 impl AppServerIdentityClient {
+    pub(crate) fn recover_conversation(&self, key: String) -> Result<()> {
+        let (response, receiver) = mpsc::channel();
+        self.command_tx
+            .send(Command::RecoverConversation { key, response })
+            .context("identity worker stopped")?;
+        receiver
+            .recv()
+            .context("identity worker stopped during recovery")?
+    }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
     pub(crate) fn respond_models(&self, req: tiny_http::Request) -> Result<()> {
         crate::models::respond(&self.socket, req)
     }
 
-    pub(crate) fn start(socket: PathBuf, pool_size: usize) -> Result<(Self, Vec<SessionIdentity>)> {
+    pub(crate) fn start(
+        socket: PathBuf,
+        mode: IdentityMode,
+    ) -> Result<(Self, Vec<SessionIdentity>)> {
         let (command_tx, command_rx) = tokio_mpsc::unbounded_channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let worker_socket = socket.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let worker_alive = Arc::clone(&alive);
         std::thread::Builder::new()
             .name("responses-proxy-app-server".to_string())
-            .spawn(move || run_worker(worker_socket, command_rx, ready_tx, pool_size))
+            .spawn(move || {
+                run_worker(worker_socket, command_rx, ready_tx, mode);
+                worker_alive.store(false, Ordering::Release);
+            })
             .context("failed to start app-server identity worker")?;
 
         let identities = ready_rx
             .recv()
             .context("app-server identity worker stopped during startup")?
             .map_err(anyhow::Error::msg)?;
-        Ok((Self { command_tx, socket }, identities))
+        Ok((
+            Self {
+                command_tx,
+                socket,
+                alive,
+            },
+            identities,
+        ))
+    }
+
+    pub(crate) fn acquire_conversation(
+        &self,
+        key: String,
+        continuation: Continuation,
+    ) -> Result<SessionIdentity> {
+        let (response, receiver) = mpsc::channel();
+        self.command_tx
+            .send(Command::AcquireConversation {
+                key,
+                continuation,
+                response,
+            })
+            .context("identity worker stopped")?;
+        receiver
+            .recv()
+            .context("identity worker stopped before replying")?
+    }
+
+    pub(crate) fn release_conversation(
+        &self,
+        identity: SessionIdentity,
+        outcome: crate::conversations::Outcome,
+    ) -> Result<()> {
+        let (response, receiver) = mpsc::channel();
+        self.command_tx
+            .send(Command::ReleaseConversation {
+                identity,
+                outcome,
+                response,
+            })
+            .context("identity worker stopped")?;
+        receiver
+            .recv()
+            .context("identity worker stopped before releasing conversation")?
     }
 
     pub(crate) fn read_identity(&self, thread_id: &str) -> Result<Option<SessionIdentity>> {
@@ -108,8 +209,9 @@ impl AppServerIdentityClient {
         thread_id: &str,
         body: Value,
         headers: HashMap<String, String>,
+        dispatch: Option<crate::scheduler::Dispatch>,
     ) -> Result<crate::raw_response_stream::RawResponseStream> {
-        crate::raw_response_stream::start(&self.socket, thread_id, body, headers)
+        crate::raw_response_stream::start(&self.socket, thread_id, body, headers, dispatch)
     }
 }
 
@@ -245,9 +347,7 @@ where
                 continue;
             }
             if let Some(error) = message.get("error") {
-                return Err(anyhow::anyhow!(
-                    "app-server method {method} failed: {error}"
-                ));
+                return Err(serde_json::from_value::<RpcError>(error.clone())?.into());
             }
             return message
                 .get("result")
@@ -313,7 +413,9 @@ where
     Ok(thread_ids)
 }
 
-async fn load_identities<S>(stream: &mut WebSocketStream<S>) -> Result<Vec<SessionIdentity>>
+pub(super) async fn load_identities<S>(
+    stream: &mut WebSocketStream<S>,
+) -> Result<Vec<SessionIdentity>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -376,7 +478,7 @@ fn run_worker(
     socket: PathBuf,
     mut command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     ready_tx: mpsc::SyncSender<Result<Vec<SessionIdentity>, String>>,
-    pool_size: usize,
+    mut mode: IdentityMode,
 ) {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -395,8 +497,13 @@ fn run_worker(
         };
         let setup = async {
             initialize(&mut stream).await?;
-            let thread_ids = create_pool_threads(&mut stream, pool_size).await?;
-            select_pool_identities(&thread_ids, load_identities(&mut stream).await?)
+            match &mode {
+                IdentityMode::Pool(size) => {
+                    let thread_ids = create_pool_threads(&mut stream, *size).await?;
+                    select_pool_identities(&thread_ids, load_identities(&mut stream).await?)
+                }
+                IdentityMode::Durable(_) => Ok(Vec::new()),
+            }
         }
         .await;
         let identities = match setup {
@@ -410,8 +517,45 @@ fn run_worker(
             return;
         }
 
-        while let Some(command) = command_rx.recv().await {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            let command = tokio::select! {
+                command = command_rx.recv() => match command { Some(command) => command, None => break },
+                _ = tick.tick() => {
+                    if let IdentityMode::Durable(conversations) = &mut mode
+                        && let Err(error) = conversations.retire(&mut stream).await {
+                        eprintln!("conversation retirement failed: {error:#}");
+                        break;
+                    }
+                    continue;
+                }
+            };
             match command {
+                Command::RecoverConversation { key, response } => {
+                    let result = match &mut mode {
+                        IdentityMode::Durable(conversations) => conversations.recover(&socket, &mut stream, &key).await,
+                        IdentityMode::Pool(_) => Err(anyhow::anyhow!("durable conversations disabled")),
+                    };
+                    let _ = response.send(result);
+                }
+                Command::AcquireConversation { key, continuation, response } => {
+                    let result = match &mut mode {
+                        IdentityMode::Durable(conversations) => conversations.acquire(&mut stream, key, continuation).await,
+                        IdentityMode::Pool(_) => Err(anyhow::anyhow!("durable conversations disabled")),
+                    };
+                    let fatal = result.as_ref().is_err_and(|error| error.downcast_ref::<crate::scheduler::Rejection>().is_none());
+                    let _ = response.send(result);
+                    if fatal { break; }
+                }
+                Command::ReleaseConversation { identity, outcome, response } => {
+                    let result = match &mut mode {
+                        IdentityMode::Durable(conversations) => conversations.release(&identity.thread_id, outcome),
+                        IdentityMode::Pool(_) => Err(anyhow::anyhow!("durable conversations disabled")),
+                    };
+                    let failed = result.is_err();
+                    let _ = response.send(result);
+                    if failed { break; }
+                }
                 Command::ReadIdentity {
                     thread_id,
                     response,
@@ -443,6 +587,7 @@ mod wire_tests;
 mod tests {
     use super::select_pool_identities;
     use crate::identity::SessionIdentity;
+
     use pretty_assertions::assert_eq;
 
     fn identity(thread_id: &str) -> SessionIdentity {

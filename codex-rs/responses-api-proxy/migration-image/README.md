@@ -11,7 +11,7 @@ This image is Linux x86_64; ARM hosts require amd64 emulation. Windows users
 can run the commands in WSL with Docker integration enabled.
 The machine must be able to reach Codex login and model services.
 
-Extract `codex-migration-linux-amd64.tar.gz`, enter `codex-migration`, then run:
+Extract `codex-migration-2026-09-18-admin-ui-linux-amd64.tar.gz`, enter `codex-migration`, then run:
 
 ```sh
 ./migrate.sh
@@ -76,18 +76,70 @@ the proxy port publicly. Close the SSH process when the test is complete.
 ./migrate.sh restart
 ./migrate.sh login
 ./migrate.sh token
+./migrate.sh switch-account account-b
 ```
 
 Login state and API token persist in the `codex-migration_codex-data` Docker
 volume. Do not delete that volume unless intentionally removing credentials.
-After changing accounts, restart the service. Health checks verify local
-process readiness, not model quota or inference access. Model listing does
-not guarantee that every listed model is callable.
+Health checks verify local process readiness, not model quota or inference
+access. Model listing does not guarantee that every listed model is callable.
+
+Open `http://127.0.0.1:18876/admin/accounts` and enter the Worker Token.
+The page supports auth.json import, browser login links with pasted callbacks,
+account deletion, active account selection, and live concurrency changes.
+Profiles are stored in `/data/accounts` inside the persistent Docker volume.
+Adding a profile does not activate it; select it explicitly in the page.
+Switching requires an idle queue, then app-server reloads its authentication
+without a restart. Concurrency changes take effect immediately and persist.
+The default selectable capacity is 32; changing `CODEX_SESSION_POOL_SIZE` or
+other container environment settings requires `./migrate.sh start` to recreate.
+
+To enable automatic switching after a confirmed quota exhaustion, also set
+`CODEX_WORKER_AUTO_SWITCH=1`. The worker selects the first profile (sorted by
+name) different from the active profile. Leave this disabled if account
+selection requires manual approval.
+
+### Conversation queue
+
+The `2026-09-18-admin-ui-bundle1` image enables the queue and administration
+page by default. Keep `CODEX_WORKER_QUEUE=1` to use the administration page. Defaults allow two running requests, one per conversation, with a
+300 ms account start interval. Verified new user turns wait 1500 ms after the
+previous response finishes; verified tool continuations wait 300 ms and
+unclassified continuations wait 800 ms. Other settings are in `.env.example`.
+
+Enable the Sub2API account extras `strict_raw_forward=true` and
+`worker_queue_enabled=true` after the Worker is ready, and set account ingress
+concurrency to 26. The gateway reserves one additional transport connection
+for cancellation. Existing Worker and gateway API keys remain unchanged.
+
+Inspect the authenticated queue without printing its token:
+
+```sh
+docker compose exec -T api curl --noproxy '*' --silent --show-error \
+  --config /tmp/worker-queue-curl.conf http://127.0.0.1:8787/internal/queue/status
+```
+
+`/healthz` checks liveness; authenticated `/readyz` also checks queue readiness.
+The journal at `/data/queue-state.json` must persist across restarts. An unknown
+upstream outcome keeps one execution slot occupied and blocks that conversation;
+other conversations can use the remaining capacity. The reservation survives a
+restart. Only recover it after independently confirming the upstream has stopped;
+do not delete the journal to bypass this state. Healthy conversation identities
+resume after restart; unknown identities stay invalid. Completed request IDs
+remain protected against replay for ten minutes.
+
+Set `CODEX_WORKER_QUEUE_AUTO_RECOVER=1` to enable availability recovery for
+ChatGPT accounts. Checks wait 10/20/30 seconds in a repeating cycle; one successful
+account/identity check immediately releases the isolated conversation. New requests
+can wait within the 120-second queue budget. Recovery never replays an unknown
+request or clears account limits. Complete input history is needed to rebuild its
+backend binding. Old remote computation may still exist, so actual upstream
+concurrency can exceed two. See the proxy README for persistence and status fields.
 
 ## Build on source machine
 
 Place the three matching patched Linux x86_64 executables in `bin/`, then run
-`bash build.sh`. The output is `dist/codex-migration-linux-amd64.tar.gz`.
+`bash build.sh`. The output is `dist/codex-migration-2026-09-18-admin-ui-linux-amd64.tar.gz`.
 Only explicitly allowed binaries and entrypoint are sent to the Docker build;
 the export copies a fixed allowlist and never includes `.env` or data volumes.
 The image is based on Ubuntu 24.04. Building requires network access to the

@@ -1,7 +1,7 @@
 //! Local identities read from the host app-server thread manager.
 
 /// Immutable identity used by one slot in the proxy session pool.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct SessionIdentity {
     pub(crate) installation_id: String,
     pub(crate) session_id: String,

@@ -17,7 +17,7 @@ fn identity() -> ModelRequestIdentity {
 }
 
 #[test]
-fn rewrites_only_the_five_identity_fields() {
+fn rewrites_identity_fields_and_preserves_other_request_fields() {
     let original = json!({
         "model": "gpt-5",
         "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
@@ -52,6 +52,7 @@ fn rewrites_only_the_five_identity_fields() {
     metadata["x-codex-installation-id"] = "installation-local".into();
     metadata["session_id"] = "session-local".into();
     metadata["thread_id"] = "thread-local".into();
+    metadata["x-codex-window-id"] = "window-local".into();
     metadata["root_turn_id"] = "root-local".into();
     metadata["parent_turn_id"] = "parent-turn-local".into();
     let mut nested: serde_json::Value =
@@ -60,6 +61,7 @@ fn rewrites_only_the_five_identity_fields() {
     nested["installation_id"] = "installation-local".into();
     nested["session_id"] = "session-local".into();
     nested["thread_id"] = "thread-local".into();
+    nested["window_id"] = "window-local".into();
     nested["root_turn_id"] = "root-local".into();
     nested["parent_turn_id"] = "parent-turn-local".into();
     metadata["x-codex-turn-metadata"] = serde_json::to_string(&nested).unwrap().into();

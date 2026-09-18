@@ -68,3 +68,27 @@ fn returns_only_bounded_upstream_routing_state() {
     );
     assert_eq!(response_headers(&upstream), HashMap::new());
 }
+
+#[test]
+fn preserves_retry_hint_and_media_type_but_rejects_ambiguous_values() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "retry-after",
+        HeaderValue::from_static("Wed, 21 Oct 2037 07:28:00 GMT"),
+    );
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert("authorization", HeaderValue::from_static("secret"));
+    assert_eq!(
+        response_headers(&headers),
+        HashMap::from([
+            ("retry-after".into(), "Wed, 21 Oct 2037 07:28:00 GMT".into()),
+            ("content-type".into(), "application/json".into()),
+        ])
+    );
+    headers.append("retry-after", HeaderValue::from_static("5"));
+    headers.insert(
+        "content-type",
+        HeaderValue::from_str(&"a".repeat(1025)).unwrap(),
+    );
+    assert_eq!(response_headers(&headers), HashMap::new());
+}

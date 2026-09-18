@@ -2,5 +2,7 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "responses-api-proxy",
+    compile_data = ["src/admin_accounts.html"],
     crate_name = "codex_responses_api_proxy",
+    test_data_extra = glob(["src/**/snapshots/**"]),
 )
