@@ -19,6 +19,9 @@ expression: "include_str!(\"admin_accounts.html\")"
 @media(max-width:800px){.sidebar{position:static;width:auto;padding:15px 20px;flex-direction:row;align-items:center;justify-content:space-between}.brand{font-size:20px}.brand-mark{width:30px;height:30px}.nav-label,.sidebar-bottom{display:none}.nav-item{padding:7px 12px;font-size:12px}.workspace{margin:0;padding:22px 18px 32px}.topbar{margin-bottom:25px}.page-heading{align-items:flex-start}h1{font-size:26px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.add-grid{grid-template-columns:1fr}.card-heading{padding:21px}.form-body{padding:0 21px 21px}.metric-value{font-size:30px}.current-account,.concurrency{padding:21px}.footer{flex-wrap:wrap}.login-card{margin:30px auto}.table-note{padding:15px 20px}}
 @media(max-width:600px){.accounts-card .card-heading{align-items:flex-start;flex-direction:column;gap:8px}.table-wrap{overflow:visible}table,tbody,tr,td{display:block}thead{display:none}tr{padding:15px 21px;border-top:1px solid var(--line)}td{padding:6px 0;border:0;overflow-wrap:anywhere}td:not(.empty){display:grid;grid-template-columns:76px minmax(0,1fr);align-items:center;gap:6px}td:not(.empty)::before{color:var(--muted);font-size:11px;font-weight:400}td:nth-child(1)::before{content:"账号名称"}td:nth-child(2)::before{content:"登录账号"}td:nth-child(3)::before{content:"状态"}td:last-child:not(.empty){display:flex;flex-wrap:wrap;margin-top:7px;padding-left:82px}td:last-child::before{content:none}.badge{justify-self:start}td button{margin:0}.empty{padding:15px 0!important}.topbar{font-size:10px}.page-heading{gap:12px}.page-heading button{font-size:12px;padding:9px 12px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:1px solid var(--line);border-radius:16px;color:var(--ink);background:var(--paper);overflow:auto}dialog::backdrop{background:rgba(20,35,28,.45)}.detail-top{display:flex;justify-content:space-between;align-items:center;gap:20px}.detail-message{background:var(--bg,#f5f6f3);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0}.detail-message strong{color:var(--green)}.detail-text,.request-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7}.request-detail pre{max-height:360px;overflow:auto}.request-detail summary{cursor:pointer;padding:12px 0}
+#message{position:fixed;right:24px;bottom:24px;z-index:1000;width:min(540px,calc(100vw - 48px));margin:0;box-shadow:0 8px 30px #163c2826}#confirmDialog{width:min(460px,calc(100vw - 32px));border:1px solid var(--line);border-radius:14px;padding:24px}#confirmDialog::backdrop{background:#14251d66}#confirmText{margin:16px 0;white-space:pre-wrap}.confirm-actions{display:flex;justify-content:flex-end;gap:10px}
 </style>
 </head>
 <body>
@@ -43,6 +46,19 @@ expression: "include_str!(\"admin_accounts.html\")"
       <section class="card metric" id="unknownMetric"><div class="metric-label">结果未知<span class="metric-symbol" aria-hidden="true">◇</span></div><div class="metric-value" id="quarantined">—</div><p class="metric-foot">需要确认完成状态</p></section>
       <section class="card metric"><div class="metric-label">实际并发上限<span class="metric-symbol" aria-hidden="true">⊞</span></div><div class="metric-value"><span id="effective">—</span> <em>/ <span id="maximum">—</span></em></div><p class="metric-foot">实际可用 / 设置上限</p></section>
     </div>
+    <section class="card accounts-card" aria-labelledby="monitorTitle">
+      <div class="card-heading"><div><h2 id="monitorTitle">请求监控</h2><p class="subtitle" id="monitorSince">本次服务启动以来 · 每 5 秒刷新</p></div></div>
+      <div class="metrics" style="padding:0 24px">
+        <section class="metric"><div class="metric-label">总请求次数</div><div class="metric-value" id="requestTotal">0</div><p class="metric-foot" id="requestCompleted">已完成 0 · 处理中 0</p></section>
+        <section class="metric"><div class="metric-label">HTTP 429 次数</div><div class="metric-value" id="request429">0</div><p class="metric-foot">请求被限流</p></section>
+        <section class="metric"><div class="metric-label">平均耗时</div><div class="metric-value" id="requestAverage">—</div><p class="metric-foot">已结束请求，包含排队及完整输出</p></section>
+        <section class="metric"><div class="metric-label">最大耗时</div><div class="metric-value" id="requestMax">—</div><p class="metric-foot" id="requestTransport">传输异常 0 次</p></section>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>HTTP 状态码</th><th>次数</th><th>占已完成请求比例</th></tr></thead><tbody id="statusCounts"></tbody></table></div>
+      <div class="card-heading"><h2>最近请求</h2><span class="summary-text">最多保留 100 条</span></div>
+      <div class="table-wrap" style="max-height:320px;overflow:auto"><table><thead><tr><th>结束时间</th><th>HTTP 状态码</th><th>耗时</th><th>传输状态</th><th>详情</th></tr></thead><tbody id="recentRequests"></tbody></table></div>
+      <p class="table-note">仅统计到达模型服务的 /v1/responses 请求；不含健康检查、后台刷新和网关拒绝的请求。重启后清零。HTTP 200 不代表流内没有模型错误；传输异常另计。</p>
+    </section>
     <section class="card overview" aria-label="当前账号与并发设置">
       <div class="current-account"><div class="avatar" aria-hidden="true">C</div><div><div class="account-label">当前登录账号</div><div class="account-name" id="current">—</div><div id="summary" class="badge neutral">等待连接</div></div></div>
       <div class="concurrency"><form id="limitForm" class="inline-form"><label for="limit">并发上限 <input id="limit" type="number" min="1" step="1" required></label><button class="primary save-button">保存设置</button></form><p class="hint">保存后立即生效。降低上限不会中断已有请求；限流时实际并发可能降低。</p></div>
@@ -57,7 +73,7 @@ expression: "include_str!(\"admin_accounts.html\")"
         <form id="linkForm"><label for="linkName">账号名称<input id="linkName" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" required placeholder="例如 personal-account"></label><button class="primary">生成登录链接 ↗</button></form>
         <p id="linkResult"></p>
         <form id="pasteForm" hidden><label for="callbackUrl">回调链接<input id="callbackUrl" required placeholder="http://localhost:1455/auth/callback?code=…" spellcheck="false"></label><button class="primary">提交并保存账号</button></form>
-        <ol class="steps"><li>生成链接后，在新窗口完成登录。</li><li>跳转到 localhost 后，即使提示无法访问，也请复制地址栏完整链接。</li><li>将链接粘贴至回调输入框，提交保存。</li></ol><p class="hint">重新生成链接会作废上一次未完成的登录。</p>
+        <ol class="steps"><li>生成链接后，在新窗口完成登录。</li><li>跳转到 localhost 后，即使提示无法访问，也请复制地址栏完整链接。</li><li>将链接粘贴至回调输入框，提交保存。</li></ol><p class="hint">重新生成链接会作废上一次未完成的登录。登录已有账号会更新其认证并保留原名称；当前账号会自动应用新认证。</p>
       </div></section>
       <section class="card" aria-labelledby="importTitle"><div class="card-heading"><div><h2 id="importTitle"><span class="section-icon" aria-hidden="true">↑</span>导入已有账号</h2><p class="subtitle">使用已登录账号的认证文件快速添加</p></div></div><div class="form-body">
         <form id="addForm"><label for="name">账号名称<input id="name" pattern="[A-Za-z0-9_-]{1,64}" maxlength="64" required placeholder="例如 work-account"></label><label for="auth">认证文件<input id="auth" type="file" accept=".json,application/json" required></label><button>上传并添加 ↑</button></form>
@@ -67,6 +83,16 @@ expression: "include_str!(\"admin_accounts.html\")"
     <footer class="footer"><span>Codex · 账号与并发管理</span><span>账号名称支持英文字母、数字、短横线和下划线</span></footer>
   </main>
 </div>
+<dialog id="requestDetail" class="request-detail" aria-labelledby="detailTitle">
+  <div class="detail-top"><h2 id="detailTitle">请求详情</h2><form method="dialog"><button aria-label="关闭请求详情">关闭 ✕</button></form></div>
+  <p id="detailMeta" class="hint"></p><p id="detailNotice" class="hint"></p>
+  <label for="detailSource">请求来源 <select id="detailSource"><option value="upstream">上游出站请求</option><option value="client">客户端原始请求</option></select></label>
+  <p id="detailEndpoint" class="hint"></p>
+  <details open><summary>请求头（凭证已脱敏）</summary><div class="table-wrap"><table><thead><tr><th>名称</th><th>值</th></tr></thead><tbody id="detailHeaders"></tbody></table></div></details>
+  <div id="detailMessages"></div>
+  <details><summary>原始请求 JSON</summary><pre id="detailRaw"></pre></details>
+</dialog>
+<dialog id="confirmDialog" aria-labelledby="confirmTitle"><h2 id="confirmTitle">确认操作</h2><p id="confirmText"></p><div class="confirm-actions"><button id="confirmCancel" type="button">取消</button><button id="confirmAccept" class="primary" type="button">确认</button></div></dialog>
 <script>
 let token = sessionStorage.getItem('codex_worker_token') || '',
   busy = false;
@@ -81,19 +107,39 @@ function message(text, error = false) {
   el('message').textContent = text;
   el('message').className = error ? 'error' : '';
 }
-async function api(path, body) {
-  const response = await fetch('/admin/api/' + path, {
-    method: body ? 'POST' : 'GET',
-    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+function confirmAction(text) {
+  const dialog = el('confirmDialog');
+  el('confirmText').textContent = text;
+  return new Promise((resolve) => {
+    const finish = (accepted) => { dialog.close(); resolve(accepted); };
+    el('confirmCancel').onclick = () => finish(false);
+    el('confirmAccept').onclick = () => finish(true);
+    dialog.oncancel = (event) => { event.preventDefault(); finish(false); };
+    dialog.showModal();
   });
-  if (response.status === 401) {
-    logout();
-    throw Error('Token 无效或已失效，请重新登录');
-  }
-  const data = await response.json();
-  if (!response.ok) throw Error(data.error || '请求失败');
-  return data;
+}
+async function api(path, body) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), path === 'login-callback' ? 90000 : 20000);
+  try {
+    const response = await fetch('/admin/api/' + path, {
+      method: body ? 'POST' : 'GET', signal: controller.signal,
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    if (response.status === 401) {
+      logout();
+      throw Error('管理 Token 无效或已失效，请重新登录控制台');
+    }
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error || '请求失败');
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError' || error instanceof TypeError) {
+      throw Error(body ? '未收到服务器确认，请先查看账号列表是否已保存，再决定是否重试。' : '暂时无法连接服务器，请稍后重试。');
+    }
+    throw error;
+  } finally { clearTimeout(timeout); }
 }
 function logout() {
   token = '';
@@ -160,20 +206,74 @@ async function load() {
     const cell = document.createElement('td');
     for (const [label, action] of [
       ['设为当前账号', 'switch'],
+      ['重新授权', 'reauthorize'],
       ['删除', 'delete'],
     ]) {
       const button = document.createElement('button');
       button.textContent = p.active && action === 'switch' ? '使用中' : label;
       button.className = action === 'delete' ? 'danger' : '';
-      button.dataset.locked = String(p.active || !p.valid);
-      button.disabled = p.active || !p.valid || busy;
-      button.onclick = () => {
-        if (confirm(`${label}「${p.name}」？`)) mutate(action, { profile: p.name });
+      const locked = action === 'switch' && (p.active || !p.valid);
+      button.dataset.locked = String(locked);
+      button.disabled = locked || busy;
+      if (p.active && action === 'delete') button.title = '当前账号需先切换后才能删除';
+      button.onclick = async () => {
+        if (action === 'reauthorize') {
+          el('linkName').value = p.name;
+          el('linkForm').requestSubmit();
+          el('linkForm').scrollIntoView({ block: 'center' });
+          return;
+        }
+        if (p.active && action === 'delete') {
+          message(`「${p.name}」是当前账号，请先添加并切换到其他账号，再删除。`, true);
+          return;
+        }
+        if (await confirmAction(`${label}「${p.name}」？`)) mutate(action, { profile: p.name });
       };
       cell.append(button);
     }
     row.append(cell);
     rows.push(row);
+  }
+  const metrics = data.metrics || {};
+  const seconds = (ms) => (Number(ms || 0) / 1000).toFixed(2) + ' s';
+  el('requestTotal').textContent = metrics.total || 0;
+  el('requestCompleted').textContent = `已完成 ${metrics.completed || 0} · 处理中 ${metrics.in_flight || 0}`;
+  el('request429').textContent = metrics.status_counts?.['429'] || 0;
+  el('requestAverage').textContent = seconds(metrics.average_duration_ms);
+  el('requestMax').textContent = seconds(metrics.max_duration_ms);
+  el('requestTransport').textContent = `传输异常 ${metrics.transport_errors || 0} 次`;
+  if (metrics.started_at) el('monitorSince').textContent =
+    `自 ${new Date(metrics.started_at * 1000).toLocaleString('zh-CN')} 起 · 每 5 秒刷新`;
+  const fillRows = (id, values, empty) => {
+    const entries = values.map((values) => {
+      const row = document.createElement('tr');
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.append(cell);
+      }
+      return row;
+    });
+    if (!entries.length) {
+      const row = document.createElement('tr'), cell = document.createElement('td');
+      cell.colSpan = id === 'statusCounts' ? 3 : 5;
+      cell.textContent = empty;
+      row.append(cell);
+      entries.push(row);
+    }
+    el(id).replaceChildren(...entries);
+  };
+  fillRows('statusCounts', Object.entries(metrics.status_counts || {}).map(([code, count]) =>
+    [code, count, ((count / Math.max(1, metrics.completed)) * 100).toFixed(1) + '%']), '暂无已完成请求');
+  fillRows('recentRequests', (metrics.recent || []).map((sample) =>
+    [new Date(sample.completed_at * 1000).toLocaleString('zh-CN'), sample.status,
+     seconds(sample.duration_ms), sample.transport_error ? '异常 / 未完整发送' : '完成']), '暂无请求记录');
+  for (const [index, sample] of (metrics.recent || []).entries()) {
+    const cell = document.createElement('td'), button = document.createElement('button');
+    button.textContent = '查看详情';
+    button.onclick = () => showRequest(sample.id);
+    cell.append(button);
+    el('recentRequests').children[index].append(cell);
   }
   el('profiles').replaceChildren(...rows);
   if (!rows.length) {
@@ -187,24 +287,94 @@ async function load() {
     el('profiles').append(row);
   }
 }
-async function mutate(action, body) {
-  if (busy) return;
-  setBusy(true);
+async function showRequest(id) {
+  const dialog = el('requestDetail');
+  el('detailTitle').textContent = `请求 #${id}`;
+  el('detailMeta').textContent = '正在加载…';
+  el('detailNotice').textContent = '';
+  el('detailMessages').replaceChildren();
+  el('detailRaw').textContent = '';
+  el('detailHeaders').replaceChildren();
+  el('detailEndpoint').textContent = '';
+  el('detailSource').onchange = null;
+  if (!dialog.open) dialog.showModal();
   try {
-    await api(action, body);
-    message('操作成功');
+    const detail = await api('request?id=' + encodeURIComponent(id));
+    // Ignore an old response if the user has since opened another request.
+    if (el('detailTitle').textContent !== `请求 #${id}`) return;
+    el('detailMeta').textContent = `${new Date(detail.completed_at * 1000).toLocaleString('zh-CN')} · HTTP ${detail.status} · ${(detail.duration_ms / 1000).toFixed(2)} 秒`;
+    el('detailSource').value = 'upstream';
+    const render = () => {
+      const upstream = el('detailSource').value === 'upstream';
+      const source = upstream ? detail.upstream : detail;
+      el('detailMessages').replaceChildren();
+      el('detailHeaders').replaceChildren();
+      el('detailRaw').textContent = '';
+      el('detailEndpoint').textContent = '';
+      if (!source) {
+        el('detailNotice').textContent = '未采集到上游请求：可能在发送前失败，或该记录未启用出站采集。可切换查看客户端原始请求。';
+        return;
+      }
+      el('detailEndpoint').textContent = upstream ? `${source.method} ${source.url}` : 'POST /v1/responses';
+      for (const header of (upstream ? source.headers : detail.client_headers) || []) {
+        const row = document.createElement('tr');
+        for (const value of [header.name, header.value]) {
+          const cell = document.createElement('td');
+          cell.style.overflowWrap = 'anywhere'; cell.style.whiteSpace = 'pre-wrap';
+          cell.textContent = value; row.append(cell);
+        }
+        el('detailHeaders').append(row);
+      }
+    el('detailNotice').textContent = (source.body_truncated ? '正文仅保留前 64 KiB。' : '') + (upstream ? '采集于应用 HTTP 发送位置。传输库随后自动补充的 Host、Content-Length、Cookie 等不在采集范围内；这不是完整网络抓包。' : '客户端发给本服务的原始请求；Authorization、Cookie 等凭证已脱敏。');
+    if (source.body === null) {
+      el('detailNotice').textContent = '请求在读取正文前被拒绝，未记录正文。';
+      return;
+    }
+    let payload;
+    try { payload = JSON.parse(source.body); } catch { payload = null; }
+    el('detailRaw').textContent = payload ? JSON.stringify(payload, null, 2) : source.body;
+    const add = (label, value) => {
+      const card = document.createElement('section'), title = document.createElement('strong'), text = document.createElement('div');
+      card.className = 'detail-message';
+      text.className = 'detail-text';
+      title.textContent = label;
+      text.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      card.append(title, text);
+      el('detailMessages').append(card);
+    };
+    if (!payload) { add('请求正文', source.body); return; }
+    add('请求参数', `模型：${payload.model || '未指定'} · 流式输出：${payload.stream ? '是' : '否'}`);
+    if (payload.instructions) add('系统指令', payload.instructions);
+    const roles = {user:'用户',assistant:'助手',system:'系统',developer:'开发者'};
+    for (const item of (Array.isArray(payload.input) ? payload.input : [payload.input])) {
+      if (item == null) continue;
+      if (typeof item === 'string') { add('用户', item); continue; }
+      const content = Array.isArray(item.content) ? item.content.map(part =>
+        typeof part === 'string' ? part : part.text || (part.type === 'input_image' ? '[图片附件，详见原始 JSON]' : JSON.stringify(part))).join('\n\n') : item.content;
+      add(roles[item.role] || item.type || '输入', content ?? item);
+    }
+    };
+    el('detailSource').onchange = render;
+    render();
+  } catch (error) { el('detailNotice').textContent = error.message; el('detailMeta').textContent = '无法加载详情'; }
+}
+async function mutate(action, body) {
+  if (busy) return false;
+  setBusy(true);
+  message(action === 'add' ? `正在保存账号「${body.profile}」…` : '正在提交操作…');
+  try {
+    const result = await api(action, body);
+    const success = action === 'add'
+      ? `账号「${result.profile}」${result.updated ? '认证已更新（保留原名称）' : '已保存'}${result.active ? '，已应用于当前账号。' : '，可设为当前账号启用。'}`
+      : action === 'delete' ? `账号「${body.profile}」已删除。` : '操作成功。';
+    message(success);
     if (action === 'add') el('addForm').reset();
-    await load();
+    try { await load(); } catch (_) { message(success + ' 列表刷新失败，请稍后刷新。'); }
+    return true;
   } catch (error) {
     message(error.message, true);
-  } finally {
-    setBusy(false);
-    try {
-      await load();
-    } catch (error) {
-      message(error.message, true);
-    }
-  }
+    return false;
+  } finally { setBusy(false); }
 }
 el('loginForm').onsubmit = async (event) => {
   event.preventDefault();
@@ -240,6 +410,7 @@ el('linkForm').onsubmit = async (event) => {
   event.preventDefault();
   if (busy) return;
   setBusy(true);
+  message('正在生成登录链接…');
   try {
     const data = await api('login-start', { profile: el('linkName').value });
     const link = document.createElement('a');
@@ -261,16 +432,18 @@ el('pasteForm').onsubmit = async (event) => {
   event.preventDefault();
   if (busy) return;
   setBusy(true);
+  message('正在完成登录并保存账号，请稍候…');
   try {
-    await api('login-callback', {
+    const result = await api('login-callback', {
       profile: el('linkName').value,
       url: el('callbackUrl').value.trim(),
     });
-    message(`账号「${el('linkName').value}」登录成功并已保存`);
+    const success = `账号「${result.profile}」${result.updated ? '重新授权成功，认证已更新（保留原名称）' : '登录成功并已保存'}${result.active ? '，已应用于当前账号。' : '，可设为当前账号启用。'}`;
+    message(success);
     el('pasteForm').hidden = true;
     el('linkResult').replaceChildren();
     el('linkForm').reset();
-    await load();
+    try { await load(); } catch (_) { message(success + ' 列表刷新失败，请稍后刷新。'); }
   } catch (error) {
     message(error.message, true);
   } finally {
@@ -279,7 +452,7 @@ el('pasteForm').onsubmit = async (event) => {
 };
 if (token) load().catch((error) => message(error.message, true));
 setInterval(() => {
-  if (token && !busy) load().catch((error) => message(error.message, true));
+  if (token && !busy && !el('confirmDialog').open) load().catch(() => { el('updated').textContent = '连接暂时中断，正在重试刷新'; });
 }, 5000);
 </script>
 </body>
