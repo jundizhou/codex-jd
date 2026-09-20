@@ -18,10 +18,6 @@ case "${1:-serve}" in
     serve) ;;
     *) exec "$@" ;;
 esac
-if ! codex login status; then
-    echo 'Login required: run ./migrate.sh login first.' >&2
-    exit 1
-fi
 if [[ ! -s /data/api-token ]]; then
     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /data/api-token
 fi

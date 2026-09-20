@@ -172,6 +172,11 @@ where
                 Err(_) => continue,
             };
             if message.get("id").and_then(Value::as_str) == Some(&id) {
+                if (message.get("error").is_some() || message.get("result").is_some())
+                    && let Some(dispatch) = dispatch
+                {
+                    dispatch.local_finished();
+                }
                 if let Some(error) = message.get("error") {
                     anyhow::bail!("app-server raw Responses failed: {error}");
                 }

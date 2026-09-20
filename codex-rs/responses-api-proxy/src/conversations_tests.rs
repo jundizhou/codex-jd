@@ -91,10 +91,11 @@ fn durable_index_locks_and_preserves_invalidation_across_restart() {
     index.records.insert(
         "logical".into(),
         Record {
-            account: index.account.clone(),
+            account: index.account.clone().unwrap(),
             identity: identity.clone(),
             used_at: 10,
             invalid: false,
+            recoverable: false,
         },
     );
     index.save().unwrap();
@@ -137,4 +138,46 @@ fn failed_index_write_does_not_replace_the_last_durable_mapping() {
     std::fs::create_dir(path.with_extension("tmp")).unwrap();
     assert!(index.save().is_err());
     assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[tokio::test]
+async fn empty_deployment_accepts_first_account_without_restarting() {
+    use super::*;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+
+    let root = tempfile::tempdir().unwrap();
+    let auth = root.path().join("auth.json");
+    let mut index = Conversations::open(
+        root.path().join("sessions.json"),
+        auth.clone(),
+        /*capacity*/ 2,
+        Duration::ZERO,
+        &[],
+    )
+    .unwrap();
+    let (client, _server) = tokio::io::duplex(1024);
+    let mut stream = WebSocketStream::from_raw_socket(client, Role::Client, /*config*/ None).await;
+    assert!(
+        index
+            .acquire(
+                &mut stream,
+                "missing".into(),
+                Continuation::RequiresIdentity
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(index.account, None);
+
+    std::fs::write(&auth, r#"{"OPENAI_API_KEY":"fixture"}"#).unwrap();
+    let error = index
+        .acquire(
+            &mut stream,
+            "missing".into(),
+            Continuation::RequiresIdentity,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.downcast_ref::<Rejection>().is_some());
+    assert_eq!(index.account, Some(account(&auth).unwrap()));
 }

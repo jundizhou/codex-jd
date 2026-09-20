@@ -20,9 +20,6 @@ ensure_image() {
 case "${1:-start}" in
     start)
         ensure_image
-        if ! "${compose[@]}" run --rm --no-deps -T api login-status; then
-            "${compose[@]}" run --rm --no-deps api login
-        fi
         "${compose[@]}" up -d --wait --wait-timeout 180
         echo 'Ready. Open /admin/accounts on the configured host and port.'
         echo 'Run ./migrate.sh token to view the Worker Token for the page and API.'

@@ -1,4 +1,4 @@
-//! Check live account availability without generating a response, then retire the invalid binding.
+//! Restore the original binding only after local termination and identity verification.
 use super::*;
 use crate::app_server_reader::connect;
 use crate::app_server_reader::initialize;
@@ -13,7 +13,10 @@ impl Conversations {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
-        ensure!(account(&self.auth_path)? == self.account, "account changed");
+        ensure!(
+            Some(account(&self.auth_path)?) == self.account,
+            "account changed"
+        );
         // A dedicated connection bounds probe failure without poisoning the identity connection.
         let limits = tokio::time::timeout(Duration::from_secs(10), async {
             let mut probe = connect(socket).await?;
@@ -22,12 +25,12 @@ impl Conversations {
         })
         .await??;
         ensure!(
-            account(&self.auth_path)? == self.account,
+            Some(account(&self.auth_path)?) == self.account,
             "account changed during probe"
         );
         if let Some(id) = limits["accountId"].as_str() {
             ensure!(
-                digest(&[b"chatgpt", id.as_bytes()]) == self.account,
+                Some(digest(&[b"chatgpt", id.as_bytes()])) == self.account,
                 "probe account mismatch"
             );
         }
@@ -51,24 +54,55 @@ impl Conversations {
                     .is_none_or(|remaining| remaining > 0),
             "account limits unavailable or exhausted"
         );
-        if let Some(record) = self.records.get_mut(key) {
-            ensure!(record.invalid, "refusing to retire a valid binding");
-            let thread = record.identity.thread_id.clone();
-            // Persist invalidation before releasing the scheduler reservation. Recovery
-            // is idempotent across a crash between this write and the journal write.
-            self.save()?;
-            if self.loaded.contains_key(&thread) {
-                send_and_wait_for_response(
-                    stream,
-                    "thread/unsubscribe",
-                    json!({"threadId": thread}),
-                )
-                .await?;
-                self.loaded.remove(&thread);
-            }
-        } else {
-            self.save()?;
+        self.restore_binding(stream, key).await
+    }
+
+    async fn restore_binding<S>(&mut self, stream: &mut WebSocketStream<S>, key: &str) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        ensure!(
+            Some(account(&self.auth_path)?) == self.account,
+            "account changed"
+        );
+        let record = self.records.get(key).ok_or(Rejection::BindingLost)?;
+        ensure!(
+            record.recoverable,
+            "local request termination has not been confirmed"
+        );
+        let thread = record.identity.thread_id.clone();
+        ensure!(
+            self.loaded.get(&thread) != Some(&None),
+            "original thread is still leased"
+        );
+        if !self.loaded.contains_key(&thread) {
+            send_and_wait_for_response(
+                stream,
+                "thread/resume",
+                json!({"threadId": thread, "excludeTurns": true}),
+            )
+            .await?;
+            self.loaded.insert(thread.clone(), Some(Instant::now()));
         }
+        let expected = &self.records[key].identity;
+        ensure!(
+            load_identities(stream)
+                .await?
+                .iter()
+                .any(|identity| identity == expected),
+            "restored thread identity changed; refusing continuation"
+        );
+        // Keep termination proof until the next acquire, making recovery idempotent
+        // if queue persistence fails or the process stops before releasing the slot.
+        self.records
+            .get_mut(key)
+            .ok_or(Rejection::BindingLost)?
+            .invalid = false;
+        self.save()?;
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "conversation_recovery_tests.rs"]
+mod tests;

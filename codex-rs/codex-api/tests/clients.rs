@@ -644,3 +644,88 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
 
     Ok(())
 }
+
+#[derive(Clone)]
+struct ConnectFailureTransport {
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
+    failures: usize,
+    client: codex_http_client::HttpClient,
+    closed_address: String,
+}
+
+impl HttpTransport for ConnectFailureTransport {
+    async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
+        Err(TransportError::Build("unexpected execute".into()))
+    }
+
+    async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
+        let attempt = self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if attempt < self.failures {
+            let error = self
+                .client
+                .get(&self.closed_address)
+                .send()
+                .await
+                .err()
+                .ok_or_else(|| TransportError::Build("expected connection failure".into()))?;
+            assert!(error.is_connect());
+            return Err(TransportError::Connection(error));
+        }
+        Ok(StreamResponse {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            bytes: Box::pin(futures::stream::empty()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn raw_responses_retry_only_connection_establishment_and_stop_at_three_attempts() -> Result<()>
+{
+    for failures in [1, 9] {
+        let socket = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let closed_address = format!("http://{}", socket.local_addr()?);
+        drop(socket);
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let transport = ConnectFailureTransport {
+            attempts: attempts.clone(),
+            failures,
+            client: codex_http_client::HttpClientBuilder::new().build_direct()?,
+            closed_address,
+        };
+        let client = ResponsesClient::new(transport, provider("openai"), Arc::new(NoAuth));
+        let result = client
+            .stream_raw(
+                serde_json::json!({"model":"test","input":[]}),
+                HeaderMap::new(),
+                Compression::None,
+            )
+            .await;
+        assert_eq!(result.is_ok(), failures == 1);
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            if failures == 1 { 2 } else { 3 }
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_responses_do_not_replay_ambiguous_network_failures() {
+    let transport = FlakyTransport::new();
+    let client = ResponsesClient::new(transport.clone(), provider("openai"), Arc::new(NoAuth));
+    let result = client
+        .stream_raw(
+            serde_json::json!({"model":"test","input":[]}),
+            HeaderMap::new(),
+            Compression::None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ApiError::Transport(TransportError::Network(_)))
+    ));
+    assert_eq!(transport.attempts(), 1);
+}

@@ -17,10 +17,12 @@ Extract `codex-migration-2026-09-18-admin-ui-linux-amd64.tar.gz`, enter `codex-m
 ./migrate.sh
 ```
 
-The script imports the image when missing, prompts for a Codex device login,
-then starts the service. Complete login in your browser. Device-code login
-must be enabled for your account/workspace. Login is inside this deployment's
-data volume, not automatically shared with an existing desktop login.
+The script imports the image when missing and starts the service without
+requiring a Codex account. Open `/admin/accounts`, enter the Worker Token,
+then add and activate an account before making model requests. You can also
+run `./migrate.sh login` for device-code login if enabled for your
+account/workspace. Login is inside this deployment's data volume, not
+automatically shared with an existing desktop login.
 
 Base URL: `http://127.0.0.1:18876/v1`.
 Get the newly generated Bearer API token with `./migrate.sh token`.
@@ -125,16 +127,22 @@ upstream outcome keeps one execution slot occupied and blocks that conversation;
 other conversations can use the remaining capacity. The reservation survives a
 restart. Only recover it after independently confirming the upstream has stopped;
 do not delete the journal to bypass this state. Healthy conversation identities
-resume after restart; unknown identities stay invalid. Completed request IDs
+resume after restart; identities without proof of local request termination stay invalid. Completed request IDs
 remain protected against replay for ten minutes.
 
 Set `CODEX_WORKER_QUEUE_AUTO_RECOVER=1` to enable availability recovery for
 ChatGPT accounts. Checks wait 10/20/30 seconds in a repeating cycle; one successful
-account/identity check immediately releases the isolated conversation. New requests
-can wait within the 120-second queue budget. Recovery never replays an unknown
-request or clears account limits. Complete input history is needed to rebuild its
-backend binding. Old remote computation may still exist, so actual upstream
-concurrency can exceed two. See the proxy README for persistence and status fields.
+account/identity check releases a reservation only when a terminal app-server RPC
+was observed. Recovery resumes and verifies the original thread identity instead
+of discarding its binding. Termination proof persists across proxy restarts. New
+requests can wait within the 120-second queue budget, retaining their original
+routing header and tool dependencies. A lost control connection without a terminal
+RPC remains quarantined; a healthy account alone is not sufficient to recover it.
+Recovery never replays an unknown request or clears account limits. The raw API
+retries connection-establishment failures at most twice, with 250/500 ms backoff;
+ambiguous network failures and partially returned responses are not replayed.
+Old remote computation may still exist, so actual upstream concurrency can exceed
+two. See the proxy README for persistence and status fields.
 
 ## Build on source machine
 

@@ -75,6 +75,7 @@ impl Continuation {
 #[derive(Clone, Copy)]
 pub(crate) enum Outcome {
     Released,
+    Recoverable,
     Unknown,
 }
 
@@ -85,6 +86,9 @@ struct Record {
     used_at: u64,
     #[serde(default)]
     invalid: bool,
+    // Persist proof that the local RPC ended independently of upstream outcome.
+    #[serde(default)]
+    recoverable: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -96,7 +100,7 @@ struct Snapshot {
 pub(crate) struct Conversations {
     path: PathBuf,
     _lock: File,
-    account: String,
+    account: Option<String>,
     auth_path: PathBuf,
     records: HashMap<String, Record>,
     // None denotes a lease; only completed leases may be unloaded or evicted.
@@ -170,7 +174,17 @@ impl Conversations {
         let conversations = Self {
             path,
             _lock: lock,
-            account: account(&auth_path)?,
+            account: match account(&auth_path) {
+                Ok(account) => Some(account),
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    None
+                }
+                Err(error) => return Err(error),
+            },
             auth_path,
             records,
             loaded: HashMap::new(),
@@ -190,14 +204,17 @@ impl Conversations {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
+        // An empty deployment can serve administration before its first account is added.
+        let account = account(&self.auth_path)?;
+        let active = self.account.get_or_insert_with(|| account.clone());
         // Do not let an in-place account replacement reuse a live account's threads.
         ensure!(
-            account(&self.auth_path)? == self.account,
+            &account == active,
             "account changed; restart the Worker after draining"
         );
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let previous = self.records.get(&key).filter(|record| {
-            record.account == self.account
+            record.account == account
                 && !record.invalid
                 && now.saturating_sub(record.used_at) < RETENTION
         });
@@ -329,10 +346,11 @@ impl Conversations {
         self.records.insert(
             key,
             Record {
-                account: self.account.clone(),
+                account,
                 identity: identity.clone(),
                 used_at: now,
                 invalid: false,
+                recoverable: false,
             },
         );
         self.save()?;
@@ -347,15 +365,21 @@ impl Conversations {
                     *idle = Some(Instant::now());
                 }
             }
-            Outcome::Unknown => {
+            Outcome::Unknown | Outcome::Recoverable => {
                 for record in self
                     .records
                     .values_mut()
                     .filter(|record| record.identity.thread_id == thread_id)
                 {
                     record.invalid = true;
+                    record.recoverable = matches!(outcome, Outcome::Recoverable);
                 }
                 self.save()?;
+                if matches!(outcome, Outcome::Recoverable)
+                    && let Some(idle) = self.loaded.get_mut(thread_id)
+                {
+                    *idle = Some(Instant::now());
+                }
             }
         }
         Ok(())

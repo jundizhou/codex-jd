@@ -8,6 +8,7 @@ pub(super) struct Attempt {
     pub(super) outcome: Mutex<Option<(Instant, Observation)>>,
     pub(super) done: Condvar,
     pub(super) failed: AtomicBool,
+    pub(super) local_finished: AtomicBool,
 }
 
 impl Attempt {
@@ -39,7 +40,11 @@ impl Lease {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none()
         {
-            crate::conversations::Outcome::Unknown
+            if self.dispatch.attempt.local_finished.load(Ordering::Acquire) {
+                crate::conversations::Outcome::Recoverable
+            } else {
+                crate::conversations::Outcome::Unknown
+            }
         } else {
             crate::conversations::Outcome::Released
         }
@@ -243,6 +248,11 @@ impl Dispatch {
 
     pub(crate) fn finalize(&self) {
         self.attempt.finalize();
+    }
+
+    // A terminal RPC proves the local handler ended, not that upstream generation ended.
+    pub(crate) fn local_finished(&self) {
+        self.attempt.local_finished.store(true, Ordering::Release);
     }
 
     pub(crate) fn unconfirmed(&self) {

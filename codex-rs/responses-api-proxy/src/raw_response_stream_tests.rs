@@ -116,8 +116,14 @@ async fn disconnected_relay(
         lease.dispatch.unconfirmed();
     }
     lease.settle();
+    let recoverable = matches!(
+        lease.identity_outcome(),
+        crate::conversations::Outcome::Recoverable
+    );
     drop(lease);
-    (result, scheduler.status())
+    let mut status = scheduler.status();
+    status["identity_recoverable"] = json!(recoverable);
+    (result, status)
 }
 
 #[tokio::test]
@@ -174,6 +180,7 @@ async fn truncated_stream_retains_capacity_even_with_successful_rpc() {
         )
         .await;
         assert!(result.is_err());
+        assert_eq!(status["identity_recoverable"], true);
         assert_eq!(
             (
                 status["running"].clone(),

@@ -119,7 +119,7 @@ impl AppServerIdentityClient {
         self.alive.load(Ordering::Acquire)
     }
 
-    pub(crate) fn respond_models(&self, req: tiny_http::Request) -> Result<()> {
+    pub(crate) fn respond_models(&self, req: crate::monitored_request::Request) -> Result<()> {
         crate::models::respond(&self.socket, req)
     }
 

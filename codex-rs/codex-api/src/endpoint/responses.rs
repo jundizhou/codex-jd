@@ -178,17 +178,36 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 HeaderValue::from_static("text/event-stream"),
             );
         }
-        let response = self
-            .session
-            .stream_encoded_json_with(
-                Method::POST,
-                self.endpoint.path(),
-                extra_headers,
-                Some(body),
-                StreamRetry::Never,
-                |req| req.compression = request_compression,
-            )
-            .await;
+        let mut attempt = 0;
+        let response = loop {
+            let response = self
+                .session
+                .stream_encoded_json_with(
+                    Method::POST,
+                    self.endpoint.path(),
+                    extra_headers.clone(),
+                    Some(body.clone()),
+                    StreamRetry::Never,
+                    |req| req.compression = request_compression,
+                )
+                .await;
+            // Connection establishment failures precede sending the HTTP request.
+            // Timeouts, HTTP errors and ambiguous network failures are not replayed.
+            if matches!(
+                &response,
+                Err(ApiError::Transport(TransportError::Connection(_)))
+            ) && attempt < 2
+            {
+                attempt += 1;
+                tracing::warn!(
+                    attempt,
+                    "raw Responses connection failed before send; retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(250 * attempt)).await;
+                continue;
+            }
+            break response;
+        };
         match response {
             Err(ApiError::Transport(TransportError::Http {
                 status,
