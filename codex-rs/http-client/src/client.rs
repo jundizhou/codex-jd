@@ -254,7 +254,15 @@ impl RequestBuilder {
     pub async fn send(self) -> Result<HttpResponse, HttpError> {
         let headers = trace_headers();
 
-        match self.builder.headers(headers).send().await {
+        let builder = self.builder.headers(headers);
+        if self.request_logging == RequestLogging::Enabled
+            && let Some(directory) = std::env::var_os("CODEX_HTTP_CAPTURE_DIR")
+            && let Some(copy) = builder.try_clone()
+            && let Ok(request) = copy.build()
+        {
+            let _ = crate::request_capture::capture(&request, std::path::Path::new(&directory));
+        }
+        match builder.send().await {
             Ok(response) => {
                 if self.request_logging == RequestLogging::Enabled {
                     tracing::debug!(
