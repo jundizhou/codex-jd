@@ -1,4 +1,5 @@
 //! Authenticated account storage and browser administration. Credentials never leave the server.
+use crate::monitored_request::Request;
 use crate::scheduler::Scheduler;
 use anyhow::Context;
 use serde_json::Value;
@@ -9,7 +10,6 @@ use std::io::Write;
 use std::path::Path;
 use tiny_http::Header;
 use tiny_http::Method;
-use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::StatusCode;
 const MAX_AUTH: u64 = 64 * 1024;
@@ -105,7 +105,6 @@ impl<'a> Store<'a> {
         validate_auth(value)?;
         anyhow::ensure!(self.names()?.len() < MAX_PROFILES, "最多保存 64 个账号");
         fs::create_dir_all(self.root)?;
-        let active = read_auth(self.auth).ok();
         for existing in self.names()? {
             if let Ok(auth) = read_auth(&self.profile(&existing)?) {
                 anyhow::ensure!(identity(&auth) != identity(value), "该账号已保存");
@@ -113,27 +112,51 @@ impl<'a> Store<'a> {
         }
         let dir = self.root.join(name);
         fs::create_dir(&dir).context("该名称已存在，或目录不可写")?;
-        let saved = if active
-            .as_ref()
-            .is_some_and(|a| identity(a) == identity(value))
-        {
-            active.as_ref().unwrap_or(value)
-        } else {
-            value
-        };
-        if let Err(error) = write_private(&dir.join("auth.json"), saved) {
+        if let Err(error) = write_private(&dir.join("auth.json"), value) {
             let _ = fs::remove_dir(&dir);
             return Err(error);
         }
         Ok(())
     }
 
+    /// Saves fresh credentials under the existing identity's name. The caller
+    /// serializes active credential replacement with request admission.
+    pub(crate) fn save_login(
+        &self,
+        name: &str,
+        value: &Value,
+        activate: impl FnOnce(&Value) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Value> {
+        anyhow::ensure!(valid_name(name), "账号名称格式无效");
+        validate_auth(value)?;
+        let existing = self.names()?.into_iter().find(|existing| {
+            self.profile(existing)
+                .and_then(|path| read_auth(&path))
+                .is_ok_and(|saved| identity(&saved) == identity(value))
+        });
+        let active = read_auth(self.auth).is_ok_and(|saved| identity(&saved) == identity(value));
+        let profile = existing.as_deref().unwrap_or(name);
+        if existing.is_some() {
+            write_private(&self.profile(profile)?, value)?;
+        } else {
+            self.add(profile, value)?;
+        }
+        if active {
+            activate(value)
+                .context("新认证已保存，但当前认证尚未更新；请等待请求结束后再次提交")?;
+        }
+        Ok(json!({"ok": true, "profile": profile, "updated": existing.is_some(), "active": active}))
+    }
+
     fn delete(&self, name: &str) -> anyhow::Result<()> {
         let path = self.profile(name)?;
-        let value = read_auth(&path)?;
-        let active = read_auth(self.auth)?;
+        let value = read_auth(&path).ok();
+        let active = read_auth(self.auth).ok();
         anyhow::ensure!(
-            identity(&value) != identity(&active),
+            value
+                .as_ref()
+                .zip(active.as_ref())
+                .is_none_or(|(value, active)| identity(value) != identity(active)),
             "当前使用的账号不能删除，请先切换账号"
         );
         fs::remove_file(&path)?;
@@ -143,7 +166,17 @@ impl<'a> Store<'a> {
 
     fn activate(&self, name: &str) -> anyhow::Result<()> {
         let next = read_auth(&self.profile(name)?)?;
-        let previous = read_auth(self.auth)?;
+        let previous = match read_auth(self.auth) {
+            Ok(previous) => previous,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return write_private(self.auth, &next);
+            }
+            Err(error) => return Err(error),
+        };
         if identity(&next) == identity(&previous) {
             return Ok(());
         }
@@ -312,10 +345,19 @@ pub(crate) fn control(
         return None;
     }
     let result = (|| -> anyhow::Result<Value> {
+        if req.method() == &Method::Get
+            && let Some(id) = req.url().strip_prefix("/admin/api/request?id=")
+        {
+            let id = id.parse::<u64>().context("无效请求编号")?;
+            return crate::request_metrics::METRICS
+                .detail(id)
+                .context("请求记录已过期或不存在");
+        }
         if req.method() == &Method::Get && req.url() == "/admin/api/accounts" {
             let mut body = store.list()?;
             body["queue"] = queue.status();
             body["capacity"] = json!(store.capacity);
+            body["metrics"] = crate::request_metrics::METRICS.snapshot();
             return Ok(body);
         }
         if req.method() == &Method::Get && req.url() == "/admin/api/login-status" {
@@ -330,13 +372,21 @@ pub(crate) fn control(
         let body: Value = serde_json::from_slice(&bytes).context("请求必须是 JSON")?;
         let name = body["profile"].as_str().unwrap_or_default();
         match req.url() {
-            "/admin/api/add" => store.add(name, &body["auth"])?,
+            "/admin/api/add" => {
+                return store.save_login(name, &body["auth"], |value| {
+                    queue.switch_idle(|| write_private(auth, value))
+                });
+            }
             "/admin/api/delete" => store.delete(name)?,
             "/admin/api/switch" => queue.switch_idle(|| store.activate(name))?,
             "/admin/api/login-start" => return crate::admin_login::start(root, name),
             "/admin/api/login-callback" => {
                 let url = body["url"].as_str().context("缺少回调链接")?;
-                crate::admin_login::complete(root, auth, capacity, name, url)?;
+                return crate::admin_login::complete(root, name, url, |value| {
+                    store.save_login(name, value, |value| {
+                        queue.switch_idle(|| write_private(auth, value))
+                    })
+                });
             }
             "/admin/api/concurrency" => {
                 let limit = body["limit"].as_u64().context("并发必须为整数")?;

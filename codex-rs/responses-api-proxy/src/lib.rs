@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use crate::monitored_request::Request;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -18,7 +19,6 @@ use serde::Serialize;
 use serde_json::Value;
 use tiny_http::Header;
 use tiny_http::Method;
-use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
@@ -34,11 +34,13 @@ mod conversations;
 mod dump;
 mod identity;
 mod models;
+mod monitored_request;
 mod queue_http;
 mod queue_signals;
 mod queue_store;
 mod queue_throttle;
 mod raw_response_stream;
+mod request_metrics;
 mod rewrite;
 mod scheduler;
 mod session_pool;
@@ -108,6 +110,7 @@ fn configured_account_label() -> String {
 
 /// Entry point for the library main, for parity with other crates.
 pub fn run_main(args: Args) -> Result<()> {
+    std::sync::LazyLock::force(&request_metrics::METRICS);
     let default_size = if args.queue {
         32
     } else {
@@ -219,6 +222,7 @@ pub fn run_main(args: Args) -> Result<()> {
 
     let http_shutdown = args.http_shutdown;
     for request in server.incoming_requests() {
+        let request = Request::from(request);
         let received = Instant::now();
         let (request, admission) = if let Some(queue) = &forward_config.queue {
             if request.method() == &Method::Get && request.url() == "/healthz" {
@@ -293,7 +297,7 @@ pub fn run_main(args: Args) -> Result<()> {
                 request,
                 received,
             ) {
-                eprintln!("forwarding error: {e}");
+                eprintln!("forwarding error: {e:#}");
             }
         });
     }
@@ -371,13 +375,17 @@ fn forward_request(
         req.as_reader()
             .take((reserved + 1) as u64)
             .read_to_end(&mut body)?;
+        req.capture_body(&body);
         if body.len() > reserved {
             queue_http::error(req, scheduler::Rejection::TooLarge);
             return Ok(());
         }
         let fallback = format!(
-            "{}-{}",
+            "{}-{}-{}",
             std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos(),
             PROXY_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
         let pending = match queue_http::pending(&req, &body, received, fallback) {
@@ -425,6 +433,7 @@ fn forward_request(
         return result;
     }
     req.as_reader().read_to_end(&mut body)?;
+    req.capture_body(&body);
     let affinity_key = key_for_request(&body);
     let session_pool = session_pool.context("nonqueue session pool missing")?;
     let identity = session_pool.acquire(affinity_key.as_deref());
@@ -438,7 +447,7 @@ fn forward_request_with_identity(
     config: &ForwardConfig,
     dump_dir: Option<&ExchangeDumper>,
     identity: &SessionIdentity,
-    req: Request,
+    mut req: Request,
     body: Vec<u8>,
     lease: Option<&scheduler::Lease>,
 ) -> Result<()> {
@@ -500,12 +509,30 @@ fn forward_request_with_identity(
             anyhow::bail!("oversized or duplicate routing/tracing header");
         }
     }
-    let result = match config.identity_client.run_raw_response(
+    let capture_path = std::env::var_os("CODEX_HTTP_CAPTURE_DIR")
+        .filter(|_| {
+            effective_identity.thread_id.len() <= 64
+                && effective_identity
+                    .thread_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        .map(|root| {
+            std::path::PathBuf::from(root).join(format!("{}.json", effective_identity.thread_id))
+        });
+    if let Some(path) = &capture_path {
+        let _ = std::fs::remove_file(path);
+    }
+    let raw_result = config.identity_client.run_raw_response(
         &effective_identity.thread_id,
         request_value,
         headers,
         lease.map(|lease| lease.dispatch.clone()),
-    ) {
+    );
+    if let Some(path) = &capture_path {
+        req.capture_upstream(path);
+    }
+    let result = match raw_result {
         Ok(result) => result,
         Err(error) => {
             if let Some(rejection) = error.downcast_ref::<scheduler::Rejection>() {

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::monitored_request::Request;
 use anyhow::Context;
 use anyhow::Result;
 use codex_utils_home_dir::find_codex_home;
@@ -11,7 +12,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
 use tiny_http::Header;
-use tiny_http::Request;
 use tiny_http::Response;
 use tokio_tungstenite::WebSocketStream;
 

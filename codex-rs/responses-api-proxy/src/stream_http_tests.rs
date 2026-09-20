@@ -31,7 +31,7 @@ fn flushes_small_chunk_before_upstream_completes() -> Result<()> {
     let (sender, receiver) = mpsc::channel();
     let worker = std::thread::spawn(move || {
         super::respond(
-            server.recv()?,
+            server.recv()?.into(),
             StatusCode(200),
             &[],
             ControlledBody(receiver),

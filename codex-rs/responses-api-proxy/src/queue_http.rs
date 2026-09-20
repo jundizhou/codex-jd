@@ -1,11 +1,11 @@
 //! The queue control plane never enters the model request or its response stream.
+use crate::monitored_request::Request;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tiny_http::Header;
 use tiny_http::Method;
-use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::StatusCode;
 

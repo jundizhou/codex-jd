@@ -100,3 +100,125 @@ fn rejects_symlink_profiles_and_writes_private_files() -> anyhow::Result<()> {
     assert_eq!(fs::metadata(&auth)?.permissions().mode() & 0o777, 0o600);
     Ok(())
 }
+
+#[test]
+fn first_account_can_be_activated_without_an_existing_login() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let auth = tmp.path().join("auth.json");
+    let root = tmp.path().join("accounts");
+    let credentials = json!({"OPENAI_API_KEY":"first-account-0001"});
+    let store = Store::new(&root, &auth, /*capacity*/ 6);
+    store.add("first", &credentials)?;
+    store.activate("first")?;
+    assert_eq!(read_auth(&auth)?, credentials);
+    assert_eq!(
+        store.list()?,
+        json!({
+            "profiles": [{"name":"first","account":"account-***0001","active":true,"valid":true}],
+            "current": "account-***0001"
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn malformed_saved_profile_can_be_deleted_without_removing_active_credentials() -> anyhow::Result<()>
+{
+    let root = tempfile::tempdir()?;
+    let auth = root.path().join("auth.json");
+    let profiles = root.path().join("accounts");
+    let active = json!({"OPENAI_API_KEY":"active-credential"});
+    write_private(&auth, &active)?;
+    fs::create_dir_all(profiles.join("broken"))?;
+    fs::write(profiles.join("broken/auth.json"), b"{invalid")?;
+    let store = Store::new(&profiles, &auth, /*capacity*/ 2);
+    store.delete("broken")?;
+    assert_eq!(store.names()?, Vec::<String>::new());
+    assert_eq!(read_auth(&auth)?, active);
+    Ok(())
+}
+
+#[test]
+fn reauthorization_replaces_revoked_tokens_and_preserves_profile_name() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let auth = tmp.path().join("auth.json");
+    let root = tmp.path().join("accounts");
+    let old = json!({"tokens":{"account_id":"same-account","access_token":"revoked","refresh_token":"old-refresh","id_token":"old-id"}});
+    let fresh = json!({"tokens":{"account_id":"same-account","access_token":"fresh","refresh_token":"new-refresh","id_token":"new-id"}});
+    write_private(&auth, &old)?;
+    let store = Store::new(&root, &auth, /*capacity*/ 2);
+    store.add("plus-1", &old)?;
+    let result = store.save_login("plus-5", &fresh, |value| write_private(&auth, value))?;
+    assert_eq!(
+        result,
+        json!({"ok":true,"profile":"plus-1","updated":true,"active":true})
+    );
+    assert_eq!(store.names()?, vec!["plus-1"]);
+    assert_eq!(
+        (read_auth(&auth)?, read_auth(&store.profile("plus-1")?)?),
+        (fresh.clone(), fresh)
+    );
+    Ok(())
+}
+
+#[test]
+fn reauthorization_of_inactive_account_does_not_replace_current_login() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let auth = tmp.path().join("auth.json");
+    let root = tmp.path().join("accounts");
+    let active = json!({"OPENAI_API_KEY":"another-account"});
+    let fresh = json!({"tokens":{"account_id":"saved-account","access_token":"fresh","refresh_token":"refresh","id_token":"id"}});
+    write_private(&auth, &active)?;
+    let store = Store::new(&root, &auth, /*capacity*/ 2);
+    store.add("saved", &fresh)?;
+    let result = store.save_login("new-label", &fresh, |_| panic!("must not activate"))?;
+    assert_eq!(
+        result,
+        json!({"ok":true,"profile":"saved","updated":true,"active":false})
+    );
+    assert_eq!(read_auth(&auth)?, active);
+    assert_eq!(store.names()?, vec!["saved"]);
+    Ok(())
+}
+
+#[test]
+fn reauthorization_keeps_fresh_profile_when_active_replacement_is_busy() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let auth = tmp.path().join("auth.json");
+    let root = tmp.path().join("accounts");
+    let old = json!({"tokens":{"account_id":"same","access_token":"old","refresh_token":"old","id_token":"old"}});
+    let fresh = json!({"tokens":{"account_id":"same","access_token":"fresh","refresh_token":"fresh","id_token":"fresh"}});
+    write_private(&auth, &old)?;
+    let store = Store::new(&root, &auth, /*capacity*/ 2);
+    store.add("saved", &old)?;
+    assert!(
+        store
+            .save_login("saved", &fresh, |_| anyhow::bail!("busy"))
+            .is_err()
+    );
+    assert_eq!(
+        (read_auth(&auth)?, read_auth(&store.profile("saved")?)?),
+        (old, fresh)
+    );
+    Ok(())
+}
+
+#[test]
+fn first_saved_profile_uses_fresh_login_instead_of_stale_active_tokens() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let auth = tmp.path().join("auth.json");
+    let root = tmp.path().join("accounts");
+    let old = json!({"tokens":{"account_id":"same","access_token":"old","refresh_token":"old","id_token":"old"}});
+    let fresh = json!({"tokens":{"account_id":"same","access_token":"fresh","refresh_token":"fresh","id_token":"fresh"}});
+    write_private(&auth, &old)?;
+    let store = Store::new(&root, &auth, /*capacity*/ 2);
+    assert_eq!(
+        store.save_login("first", &fresh, |value| write_private(&auth, value))?,
+        json!({"ok":true,"profile":"first","updated":false,"active":true})
+    );
+    assert_eq!(
+        (read_auth(&auth)?, read_auth(&store.profile("first")?)?),
+        (fresh.clone(), fresh)
+    );
+    Ok(())
+}

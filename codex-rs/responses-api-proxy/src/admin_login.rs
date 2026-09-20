@@ -1,7 +1,6 @@
 //! Paste-back account onboarding: the operator opens the authorize URL in any
 //! browser and returns the redirected localhost callback URL; this server
 //! exchanges it for credentials and stores them as a named profile.
-use crate::admin_accounts::Store;
 use crate::admin_accounts::read_auth;
 use crate::admin_accounts::valid_name;
 use anyhow::Context;
@@ -97,15 +96,14 @@ pub(crate) fn start(root: &Path, profile: &str) -> anyhow::Result<Value> {
 
 /// Completes a login with the pasted callback URL; blocks for one token
 /// exchange round trip and then stores the credentials as the named profile.
-/// The authorization code is single-use: a failed exchange or save ends the
-/// session and the operator must generate a fresh link.
+/// Credentials remain staged after a save failure so a retry does not reuse
+/// the single-use authorization code.
 pub(crate) fn complete(
     root: &Path,
-    auth: &Path,
-    capacity: usize,
     profile: &str,
     callback_url: &str,
-) -> anyhow::Result<()> {
+    save: impl FnOnce(&Value) -> anyhow::Result<Value>,
+) -> anyhow::Result<Value> {
     anyhow::ensure!(
         !callback_url.is_empty() && callback_url.len() <= 2048,
         "回调链接无效"
@@ -122,20 +120,23 @@ pub(crate) fn complete(
         session.profile
     );
     let staging = staging_dir(root, session.id);
-    let options = login_options(staging.clone());
-    let result = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("无法启动登录运行时")?
-        .block_on(session.login.complete(&options, callback_url));
-    if let Err(error) = result {
-        anyhow::bail!("登录未完成：{error}");
+    if !staging.join("auth.json").exists() {
+        let options = login_options(staging.clone());
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("无法启动登录运行时")?
+            .block_on(session.login.complete(&options, callback_url));
+        if let Err(error) = result {
+            anyhow::bail!("登录未完成：{error}");
+        }
     }
     let outcome = read_auth(&staging.join("auth.json"))
-        .and_then(|value| Store::new(root, auth, capacity).add(profile, &value));
+        .and_then(|value| save(&value))
+        .map_err(|error| anyhow::anyhow!("登录完成但保存失败：{error:#}"))?;
     *guard = None;
     let _ = fs::remove_dir_all(staging);
-    outcome.map_err(|error| anyhow::anyhow!("登录完成但保存失败：{error}"))
+    Ok(outcome)
 }
 
 #[cfg(test)]

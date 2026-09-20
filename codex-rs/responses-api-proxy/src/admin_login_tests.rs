@@ -48,15 +48,13 @@ fn staging_homes_are_isolated_and_stale_ones_removed() -> anyhow::Result<()> {
 #[test]
 fn complete_requires_an_active_matching_session() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
-    let auth = tmp.path().join("auth.json");
     let root = tmp.path().join("accounts");
     assert!(
         complete(
             &root,
-            &auth,
-            4,
             "account-a",
-            "http://localhost:1455/auth/callback?code=x&state=y"
+            "http://localhost:1455/auth/callback?code=x&state=y",
+            |_| Ok(json!({"ok": true}))
         )
         .is_err()
     );
@@ -65,15 +63,40 @@ fn complete_requires_an_active_matching_session() -> anyhow::Result<()> {
     assert!(
         complete(
             &root,
-            &auth,
-            4,
             "account-b",
-            "http://localhost:1455/auth/callback?code=x&state=y"
+            "http://localhost:1455/auth/callback?code=x&state=y",
+            |_| Ok(json!({"ok": true}))
         )
         .is_err()
     );
     assert_eq!(status()["profile"], json!("account-a"));
-    assert!(complete(&root, &auth, 4, "account-a", "garbage").is_err());
+    assert!(complete(&root, "account-a", "garbage", |_| Ok(json!({"ok": true}))).is_err());
     *pending().lock().unwrap() = None;
+    Ok(())
+}
+
+#[test]
+fn failed_save_retains_credentials_and_retry_skips_token_exchange() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("accounts");
+    start(&root, "plus-5")?;
+    let staging = staging_dir(&root, pending().lock().unwrap().as_ref().unwrap().id);
+    let credentials = json!({"OPENAI_API_KEY":"fresh-test-credential"});
+    fs::write(staging.join("auth.json"), serde_json::to_vec(&credentials)?)?;
+    assert!(
+        complete(&root, "plus-5", "already-consumed", |_| anyhow::bail!(
+            "busy"
+        ))
+        .is_err()
+    );
+    assert_eq!(status()["profile"], "plus-5");
+    assert_eq!(read_auth(&staging.join("auth.json"))?, credentials);
+    let result = complete(&root, "plus-5", "already-consumed", |value| {
+        assert_eq!(value, &credentials);
+        Ok(json!({"profile":"plus-1","updated":true}))
+    })?;
+    assert_eq!(result, json!({"profile":"plus-1","updated":true}));
+    assert_eq!(status(), json!({"active":false}));
+    assert!(!staging.exists());
     Ok(())
 }
