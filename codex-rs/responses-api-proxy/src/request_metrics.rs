@@ -144,7 +144,9 @@ impl Completion {
 
     pub(crate) fn capture_upstream_model(&mut self, upstream: &serde_json::Value) {
         if let Some(body) = upstream.get("body").and_then(serde_json::Value::as_str) {
-            self.model = model_from_json(body.as_bytes());
+            if let Some(model) = model_from_json(body.as_bytes()) {
+                self.model = Some(model);
+            }
         }
     }
 }

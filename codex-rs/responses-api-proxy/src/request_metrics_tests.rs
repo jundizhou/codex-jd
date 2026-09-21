@@ -90,3 +90,20 @@ fn counts_models_from_request_body() {
         serde_json::json!({"gpt-5.5": 1, "gpt-6-astra": 1})
     );
 }
+
+#[test]
+fn truncated_upstream_snapshot_does_not_erase_model() {
+    let metrics = Arc::new(Metrics::default());
+    let mut request = metrics.start();
+    request.capture(br#"{"model":"gpt-6-astra","input":[]}"#);
+    request.capture_upstream_model(&serde_json::json!({
+        "body": "{\"client_metadata\":{\"large\":"
+    }));
+    request.status = 200;
+    request.delivered = true;
+    drop(request);
+    assert_eq!(
+        metrics.snapshot()["model_counts"],
+        serde_json::json!({"gpt-6-astra": 1})
+    );
+}
