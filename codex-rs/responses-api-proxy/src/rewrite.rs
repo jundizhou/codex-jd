@@ -6,6 +6,8 @@ use serde_json::Value;
 
 use super::identity::SessionIdentity;
 
+const WORKSPACE_SESSION_COPIES: usize = 5;
+
 pub(crate) struct RewrittenRequest {
     pub(crate) body: Vec<u8>,
 }
@@ -49,10 +51,26 @@ fn update_turn_metadata(
     for (key, value) in identity_fields(identity) {
         insert_optional(&mut metadata, key, value);
     }
+    replicate_workspaces(&mut metadata);
     let metadata = Value::Object(metadata);
     let json = serde_json::to_string(&metadata)?;
     insert_str(client_metadata, "x-codex-turn-metadata", &json);
     Ok(())
+}
+
+/// Expands each real workspace record into one stable record per proxy session.
+/// The Git metadata is copied unchanged; only the map key is made session-specific.
+fn replicate_workspaces(metadata: &mut Map<String, Value>) {
+    let Some(Value::Object(workspaces)) = metadata.get("workspaces") else {
+        return;
+    };
+    let mut replicas = Map::new();
+    for (path, value) in workspaces {
+        for session in 1..=WORKSPACE_SESSION_COPIES {
+            replicas.insert(format!("{path}#session-{session}"), value.clone());
+        }
+    }
+    metadata.insert("workspaces".to_string(), Value::Object(replicas));
 }
 
 /// Rewrites request body identity metadata and returns the compatible header payload.
@@ -175,5 +193,38 @@ mod tests {
             &identity(),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn replicates_real_workspaces_into_five_session_records() {
+        let original = serde_json::json!({
+            "client_metadata": {
+                "x-codex-turn-metadata": serde_json::to_string(&serde_json::json!({
+                    "workspaces": {
+                        "/Users/keting/workspace/hermes-sre": {
+                            "associated_remote_urls": {"origin": "git@github.com:example/hermes-sre.git"},
+                            "latest_git_commit_hash": "e70a0e59",
+                            "has_changes": true
+                        }
+                    }
+                })).unwrap()
+            }
+        });
+        let rewritten = rewrite_body(&serde_json::to_vec(&original).unwrap(), &identity()).unwrap();
+        let body: Value = serde_json::from_slice(&rewritten.body).unwrap();
+        let metadata: Value = serde_json::from_str(
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata["workspaces"].as_object().unwrap().len(), 5);
+        for session in 1..=super::WORKSPACE_SESSION_COPIES {
+            assert_eq!(
+                metadata["workspaces"]
+                    [format!("/Users/keting/workspace/hermes-sre#session-{session}")]["latest_git_commit_hash"],
+                "e70a0e59"
+            );
+        }
     }
 }
