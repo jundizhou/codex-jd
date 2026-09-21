@@ -86,8 +86,8 @@ dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:
   <p id="detailMeta" class="hint"></p><p id="detailNotice" class="hint"></p>
   <label for="detailSource">请求来源 <select id="detailSource"><option value="upstream">上游出站请求</option><option value="client">客户端原始请求</option></select></label>
   <p id="detailEndpoint" class="hint"></p>
-  <details open><summary>请求头（凭证已脱敏）</summary><div class="table-wrap"><table><thead><tr><th>名称</th><th>值</th></tr></thead><tbody id="detailHeaders"></tbody></table></div></details>
   <div id="detailMessages"></div>
+  <details><summary>请求头（凭证已脱敏）</summary><div class="table-wrap"><table><thead><tr><th>名称</th><th>值</th></tr></thead><tbody id="detailHeaders"></tbody></table></div></details>
   <details><summary>原始请求 JSON</summary><pre id="detailRaw"></pre></details>
 </dialog>
 <dialog id="confirmDialog" aria-labelledby="confirmTitle"><h2 id="confirmTitle">确认操作</h2><p id="confirmText"></p><div class="confirm-actions"><button id="confirmCancel" type="button">取消</button><button id="confirmAccept" class="primary" type="button">确认</button></div></dialog>
