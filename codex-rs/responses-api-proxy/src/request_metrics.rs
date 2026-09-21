@@ -34,6 +34,7 @@ struct State {
     completed: u64,
     transport_errors: u64,
     status_counts: BTreeMap<u16, u64>,
+    model_counts: BTreeMap<String, u64>,
     total_duration_ms: f64,
     max_duration_ms: f64,
     recent: VecDeque<Sample>,
@@ -76,6 +77,7 @@ impl Metrics {
             started: Instant::now(),
             status: 500,
             delivered: false,
+            model: None,
         }
     }
 
@@ -109,6 +111,7 @@ impl Metrics {
             "in_flight": state.total - state.completed,
             "transport_errors": state.transport_errors,
             "status_counts": state.status_counts,
+            "model_counts": state.model_counts,
             "average_duration_ms": if state.completed == 0 { 0.0 } else { state.total_duration_ms / state.completed as f64 },
             "max_duration_ms": state.max_duration_ms,
             "recent": state.recent,
@@ -127,6 +130,7 @@ pub(crate) struct Completion {
     started: Instant,
     pub(crate) status: u16,
     pub(crate) delivered: bool,
+    model: Option<String>,
 }
 
 impl Completion {
@@ -135,6 +139,13 @@ impl Completion {
         const LIMIT: usize = 64 * 1024;
         self.body_truncated = body.len() > LIMIT;
         self.body = Some(String::from_utf8_lossy(&body[..body.len().min(LIMIT)]).into_owned());
+        self.model = model_from_json(body);
+    }
+
+    pub(crate) fn capture_upstream_model(&mut self, upstream: &serde_json::Value) {
+        if let Some(body) = upstream.get("body").and_then(serde_json::Value::as_str) {
+            self.model = model_from_json(body.as_bytes());
+        }
     }
 }
 
@@ -149,6 +160,9 @@ impl Drop for Completion {
         state.completed += 1;
         state.transport_errors += u64::from(!self.delivered);
         *state.status_counts.entry(self.status).or_default() += 1;
+        if let Some(model) = self.model.take() {
+            *state.model_counts.entry(model).or_default() += 1;
+        }
         state.total_duration_ms += duration_ms;
         state.max_duration_ms = state.max_duration_ms.max(duration_ms);
         if state.recent.len() == RECENT_LIMIT {
@@ -169,6 +183,12 @@ impl Drop for Completion {
             transport_error: !self.delivered,
         });
     }
+}
+
+fn model_from_json(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let model = value.get("model")?.as_str()?.trim();
+    (1..=128).contains(&model.len()).then(|| model.to_owned())
 }
 
 #[cfg(test)]

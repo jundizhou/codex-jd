@@ -62,7 +62,11 @@ impl Request {
         {
             let mut bytes = Vec::new();
             if file.take(2 * 1024 * 1024).read_to_end(&mut bytes).is_ok() {
-                completion.upstream = serde_json::from_slice(&bytes).ok();
+                let upstream: Option<serde_json::Value> = serde_json::from_slice(&bytes).ok();
+                if let Some(upstream) = upstream.as_ref() {
+                    completion.capture_upstream_model(upstream);
+                }
+                completion.upstream = upstream;
             }
         }
         let _ = std::fs::remove_file(path);

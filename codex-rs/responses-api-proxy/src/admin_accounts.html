@@ -51,6 +51,8 @@ dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:
         <section class="metric"><div class="metric-label">最大耗时</div><div class="metric-value" id="requestMax">—</div><p class="metric-foot" id="requestTransport">传输异常 0 次</p></section>
       </div>
       <div class="table-wrap"><table><thead><tr><th>HTTP 状态码</th><th>次数</th><th>占已完成请求比例</th></tr></thead><tbody id="statusCounts"></tbody></table></div>
+      <div class="card-heading"><h2>模型调用统计</h2><span class="summary-text">按上游请求中的 model 统计</span></div>
+      <div class="table-wrap"><table><thead><tr><th>模型</th><th>调用次数</th><th>占已完成请求比例</th></tr></thead><tbody id="modelCounts"></tbody></table></div>
       <div class="card-heading"><h2>最近请求</h2><span class="summary-text">最多保留 100 条</span></div>
       <div class="table-wrap" style="max-height:320px;overflow:auto"><table><thead><tr><th>结束时间</th><th>HTTP 状态码</th><th>耗时</th><th>传输状态</th><th>详情</th></tr></thead><tbody id="recentRequests"></tbody></table></div>
       <p class="table-note">仅统计到达模型服务的 /v1/responses 请求；不含健康检查、后台刷新和网关拒绝的请求。重启后清零。HTTP 200 不代表流内没有模型错误；传输异常另计。</p>
@@ -261,6 +263,8 @@ async function load() {
   };
   fillRows('statusCounts', Object.entries(metrics.status_counts || {}).map(([code, count]) =>
     [code, count, ((count / Math.max(1, metrics.completed)) * 100).toFixed(1) + '%']), '暂无已完成请求');
+  fillRows('modelCounts', Object.entries(metrics.model_counts || {}).map(([model, count]) =>
+    [model, count, ((count / Math.max(1, metrics.completed)) * 100).toFixed(1) + '%']), '暂无模型调用记录');
   fillRows('recentRequests', (metrics.recent || []).map((sample) =>
     [new Date(sample.completed_at * 1000).toLocaleString('zh-CN'), sample.status,
      seconds(sample.duration_ms), sample.transport_error ? '异常 / 未完整发送' : '完成']), '暂无请求记录');

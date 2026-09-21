@@ -71,3 +71,22 @@ fn request_detail_is_bounded_evicted_and_excluded_from_summary() {
     assert_eq!(metrics.detail(1), None);
     assert_eq!(metrics.detail(2), None);
 }
+
+#[test]
+fn counts_models_from_request_body() {
+    let metrics = Arc::new(Metrics::default());
+    let mut first = metrics.start();
+    first.capture(br#"{"model":"gpt-6-astra","input":[]}"#);
+    first.status = 200;
+    first.delivered = true;
+    let mut second = metrics.start();
+    second.capture(br#"{"model":"gpt-5.5","input":[]}"#);
+    second.status = 200;
+    second.delivered = true;
+    drop(first);
+    drop(second);
+    assert_eq!(
+        metrics.snapshot()["model_counts"],
+        serde_json::json!({"gpt-5.5": 1, "gpt-6-astra": 1})
+    );
+}
