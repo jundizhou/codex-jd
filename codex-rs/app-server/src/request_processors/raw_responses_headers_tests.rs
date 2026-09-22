@@ -1,4 +1,5 @@
 use super::*;
+use axum::http::HeaderName;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -11,6 +12,11 @@ fn preserves_allowed_headers_and_normalizes_names() {
         ),
         ("traceparent".to_string(), "00-abc-def-01".to_string()),
         ("tracestate".to_string(), "vendor=value".to_string()),
+        (
+            "X-OpenAI-Internal-Codex-Responses-Lite".into(),
+            "true".into(),
+        ),
+        ("X-Future-Header".into(), "opaque".into()),
     ]);
     let expected = supplied
         .iter()
@@ -40,7 +46,6 @@ fn generates_distinct_ids_without_reusing_routing_or_trace_state() {
 #[test]
 fn rejects_unsafe_headers() {
     for supplied in [
-        HashMap::from([("authorization".to_string(), "secret".to_string())]),
         HashMap::from([("traceparent".to_string(), "a\r\nb".to_string())]),
         HashMap::from([("tracestate".to_string(), "x".repeat(8193))]),
         HashMap::from([

@@ -1,71 +1,91 @@
 # Codex 代理字段处理汇总
 
-整理日期：2026-09-11（token 转发修复）。
-
-本文汇总已实现的身份字段替换与请求头处理规则。验证结果引用本次开发记录，不代表后续网络状态或模型权限始终不变。
+更新日期：2026-09-21。本文描述当前字段处理规则；线上验收记录与具体镜像版本单独保存。
 
 ## 一、总体原则
 
-**身份字段使用实际租用（本地会话会租用远程）会话的值；路由和追踪字段按规则透传；业务请求内容保持不变。**
+请求链路：客户端 → HTTP 入口 → Responses 代理 → Codex app-server → 上游模型。
 
-请求链路为：客户端 → HTTP 入口 → Responses 代理 → Codex app-server → 上游模型。
+**普通业务请求头默认保留；指定身份字段稳定替换；上游凭证和传输字段由服务器管理。**
+代理与 app-server 共用 `codex-http-client` 的 `raw_responses_headers` 规则，不再分别维护允许头名称的白名单。
+字段仍留在原来的 header 或 JSON 位置；不存在的 metadata 字段不新增，已有 null 保留。
+JSON 内容保持语义一致，不保证空白、键顺序或 HTTP 头名称大小写逐字节一致。
 
-代理启动时创建五个临时会话，每个模型请求租用其中一个。身份值从 app-server 读取，不随机伪造，也不直接沿用客户端的旧身份。
+## 二、身份与工作区替换
 
-## 二、身份与窗口字段
+仅处理指定请求头、正文 `client_metadata` 及其 `x-codex-turn-metadata` JSON 字符串；不遍历消息、工具参数或任意嵌套对象。
 
-下表中的“平铺元数据”指请求体的 `client_metadata`；“嵌套元数据”指其中 `x-codex-turn-metadata` 字符串解析后的 JSON 对象。
+| 字段 | 处理规则 |
+| --- | --- |
+| `installation_id` / `x-codex-installation-id` | 使用 app-server 的安装身份。 |
+| `session_id` / `thread_id` | 使用当前绑定的服务端会话、线程身份。 |
+| `window_id` / `x-codex-window-id` | 使用服务端窗口身份。 |
+| `context_window_id` | 稳定映射，保留与 window ID 的区分。 |
+| `turn_id` / `root_turn_id` / `parent_turn_id` | 在共同命名空间稳定映射；相同原值得到相同结果，保留父子轮次关系。 |
+| `parent_thread_id` / `x-codex-parent-thread-id` | 使用持久记录的父线程映射或服务端父身份；无法解析时拒绝请求。 |
+| `workspaces` 目录键 | 映射到绑定资料的目录，附加由原路径确定的稳定后缀；数量不变。 |
+| workspace 的 `associated_remote_urls` | 替换已有非 null URL，保留 origin、upstream 等 remote 名称。 |
+| workspace 的 `latest_git_commit_hash` / `has_changes` | 替换为同一份资料中的提交哈希与修改状态。 |
 
-| 字段 | 处理位置 | 已实现的操作 |
-| --- | --- | --- |
-| `installation_id` / `x-codex-installation-id` | 嵌套元数据的 `installation_id`、平铺元数据及出站请求头的 `x-codex-installation-id` | 使用 app-server 返回的真实安装 ID；覆盖旧值，必要时补充。 |
-| `session_id` | 平铺及嵌套元数据 | 使用当前租用会话的真实 session ID，覆盖旧值或补充缺失值；关联会话请求头由服务端构建。 |
-| `thread_id` | 平铺及嵌套元数据 | 使用当前租用线程的真实 thread ID，覆盖旧值或补充缺失值；关联线程请求头由服务端构建。 |
-| `root_turn_id` | 平铺及嵌套元数据 | 实际身份有值时写入；没有值时删除客户端遗留值，不编造根 turn。 |
-| `parent_turn_id` | 平铺及嵌套元数据 | 实际身份有值时写入；没有值时删除客户端遗留值，不编造父 turn。 |
-| `x-codex-window-id` | 出站请求头、平铺元数据 | 请求头使用当前线程的真实窗口 ID；平铺元数据中已有该字段时同步替换。 |
-| `window_id` / `context_window_id` | 平铺及嵌套元数据 | 已存在时替换为当前线程的真实窗口 ID，与出站窗口请求头一致；缺失时不额外添加这些元数据字段。 |
+五套工作区资料保存在 `CODEX_METADATA_PROFILES` 指向的持久化文件中，部署使用 `/data/metadata-profiles.json`。
+服务端 thread 的稳定哈希选择一套；多个 workspace 一对一映射。线程别名也持久保存，供父子关联恢复。
+不得为已有绑定直接改换资料内容或清空别名。未配置资料文件时 workspace 保留原值。
+五套资料与会话容量是两个概念：当前部署使用持久会话模式，容量为 32，并非五个临时会话轮换。
 
-补充规则：缺失的 `client_metadata` 和嵌套身份元数据会由代理补建；已有元数据必须符合预期类型。嵌套元数据必须是包含 JSON 对象的字符串，格式错误会拒绝请求。
+## 三、普通业务请求头
 
-**替换仅发生在上述明确位置，不会遍历整个请求体替换所有同名字段。**
+通过名称、值、重复和大小检查后，除下一节明确列出的例外，请求头原样保留其值，包括未知业务头。
 
-## 三、路由、追踪与客户端请求头
+| 字段示例 | 处理规则 |
+| --- | --- |
+| `x-openai-internal-codex-responses-lite` | 保留；不得因未列入白名单而丢失。 |
+| `x-codex-beta-features` / `OpenAI-Beta` | 保留功能与协议标记。 |
+| `x-codex-turn-state` | 原样传递；不修改、不全局缓存、不跨会话共享。 |
+| `x-codex-inference-call-id` | 已有值保留；缺失时 app-server 为本次请求生成 UUID。 |
+| `traceparent` / `tracestate` | 保留已有追踪值。 |
+| `Accept` / `Content-Type` / 其他业务头 | 保留；缺失时允许传输层提供默认值。 |
 
-| 字段 | 请求方向的处理 | 响应方向或缺省行为 |
-| --- | --- | --- |
-| `x-codex-turn-state` | 客户端传入时原样转发，不改写 token。 | 上游返回有效值时回传给客户端；没有返回时不生成。客户端负责同一 turn 的后续携带。 |
-| `x-codex-inference-call-id` | 已传入则保留原值，不重新生成。 | 缺失时由 app-server 为该请求生成 UUIDv4；raw 转发不做底层重试，不跨独立请求复用生成值。 |
-| `traceparent` | 原样传递客户端提供的值。 | 显式传入追踪头时，底层 HTTP 客户端不再用自身 span 的对应值覆盖它。 |
-| `tracestate` | 原样传递客户端提供的值。 | 与 `traceparent` 配套保留；两者均未传入时，仍允许服务端按正常机制注入追踪上下文。 |
-| `User-Agent` | 不转发客户端提供的 User-Agent。 | 由服务器实际安装的 Codex 生成，反映真实版本和运行环境，不伪装成所谓“最新版”。 |
+保留模式标记后，上游的模型与请求格式约束仍然生效，代理不会删除标记或改写业务正文来规避错误。
+本次部署实测：`gpt-5.5` 配合 lite=true 返回上游 400“不支持该模式”；`gpt-6-astra` 的有效 Lite 请求返回 200。
+Lite 验收请求使用 `reasoning.context=all_turns`、`parallel_tool_calls=false`，工具声明放在 input 的 additional_tools 项中。
 
-请求头边界：
+边界限制：至多 128 个入站头，每个名称至多 256 字节，每个值至多 8192 字节，名称和值合计至多 64 KiB。
+大小写不同也视为相同名称；重复名称、非法头值或超限输入会被拒绝，不静默截断。JSON-RPC 中无法表达重复的同名键，应在 HTTP 入口拒绝。
+迁移镜像的 Nginx 启用 `underscores_in_headers`，避免合法的下划线业务头在进入代理之前被静默丢弃。
 
-- 客户端自定义的路由、追踪头仅允许透传上述前四项；不是任意 HTTP 请求头透传。
-- 名称按大小写不敏感处理，单个值上限为 8192 字节；重复名称、超长值或非法 HTTP 头值会被拒绝。
-- 返回的 turn-state 同样受长度和有效性校验；不合格值不会作为响应头回传。
-- turn-state 不在全局或池会话中缓存，避免把一个请求的路由状态带给其他请求。
-- 公网入口的 `Authorization` 仅用于入口鉴权，不直接当作上游凭证；上游鉴权由 Codex 管理。客户端 Cookie 和上游 `Set-Cookie` 不通过此白名单转发。
+## 四、关键身份、凭证及传输例外
 
-## 四、保持不变的字段
+| 字段 | 处理规则与原因 |
+| --- | --- |
+| `Authorization` | 客户端值仅用于 Worker 入口鉴权；移除后由 Codex 上游认证配置提供真实凭证。 |
+| `Proxy-Authorization` / `api-key` / `x-api-key` | 不转发客户端凭证；上游认证配置按需提供。 |
+| `ChatGPT-Account-Id` / `OpenAI-Organization` / `OpenAI-Project` | 不让客户端值覆盖服务器选定账号或上游提供方配置。 |
+| `User-Agent` / `originator` | 使用服务器实际 Codex 版本和来源；默认值可能由 HTTP 客户端在快照边界之后添加。 |
+| `session-id` / `thread-id` / `x-client-request-id` | 去掉客户端值，由 Codex transport 写入服务端会话/线程身份。下划线形式的身份字段按第二节替换。 |
+| `x-oai-attestation` | 移除原客户端签名；它与原客户端身份绑定，不能在改写身份后原样沿用。当前 raw 链路不生成新的 attestation，不伪造签名。 |
+| `Cookie` / `Cookie2` / `Set-Cookie` | 不转发客户端 cookie 或以请求头夹带的 Set-Cookie；服务端自身 cookie store 仍由真实 transport 管理。 |
+| `x-codex-queue-*` | 内部调度信封，只用于 Worker，不发送给上游。 |
+| `Forwarded` / `Via` / `X-Real-IP` / `X-Forwarded-*` | 不泄漏入口或中间代理的来源信息。 |
+| `Host` / `Content-Length` / `Content-Encoding` / `Accept-Encoding` / `Expect` | 由实际目标、重新序列化的 JSON 及服务端传输能力决定，不沿用入站长度或压缩状态。 |
+| `Connection` / `Keep-Alive` / `Proxy-Connection` / `Proxy-Authenticate` / `TE` / `Trailer` / `Transfer-Encoding` / `Upgrade` | 逐跳字段不跨代理转发；Connection 点名的其他字段也移除。 |
 
-除上述指定身份位置外，业务 JSON 内容保持语义不变，包括：
+丢弃客户端凭证并不保证每个字段都会在出站出现：取决于服务器当前认证、账号及提供方配置。
+`x-oai-attestation` 的缺失是明确例外；普通业务头不得使用这一理由被笼统过滤。
 
-`model`、`input`、`instructions`、`tools`、`stream`、`previous_response_id`、`metadata`、已有 `turn_id` 以及其他未知字段。
+## 五、正文及响应边界
 
-“保持不变”指字段内容不被主动改写，不保证 JSON 空白或键顺序逐字节一致，也不意味着上游一定接受该模型或请求内容。
+`model`、`input`、`instructions`、工具定义/结果、sandbox 设置、`stream`、`previous_response_id`、普通 `metadata` 和其他非指定身份位置保持不变。
+代理不执行工具、不追加 prompt、不重建历史、不运行 Agent loop。
 
-内部转发使用 `rawResponses` 承载请求体，新增 `rawResponsesHeaders` 承载白名单请求头；返回值通过 `rawResponseBody`、`rawResponseStatus`、`rawResponseHeaders` 承载。这些是代理与 app-server 之间的协议字段，不会作为额外业务字段塞入上游请求体。
+本次更改只扩展请求头保留规则。响应头仍限于 `x-codex-turn-state`、`retry-after`、`content-type`；不转发上游 Set-Cookie。
+响应的状态和流式 body 按 raw 通道返回。每个请求独立处理路由状态；工具续接由客户端携带历史与对应 call_id。
 
-## 五、边界与验证结论
+## 六、验证要求
 
-- 五会话仍采用固定容量池，**五个 ephemeral 会话机制保持不变**。请求存在稳定的客户端 `session_id`、`thread_id` 或 conversation metadata 时，同一 key 的后续请求固定使用同一池会话；没有稳定 key 时继续使用空闲队列轮询。会话粘性只影响池内路由，不改写或缓存 `x-codex-turn-state`。
-- 窗口一致性以当前租用线程的真实身份为准；同一稳定 key 在保持池内绑定期间使用同一个窗口 ID，超过五个竞争 key 时空闲 slot 可能被重新绑定。
-- 每个客户端 `POST /v1/responses` 只触发一次 app-server `turn/start.rawResponses` 和一次上游 Responses 请求；raw 转发关闭传输/状态重试，并将代理到 app-server 的等待上限扩展到 1 小时，避免请求已被上游接受后因 30 秒控制通道超时而被客户端重发。代理不执行工具、不追加 prompt、不重建历史，也不运行 Agent loop。客户端若自身运行 Agent，一个用户 turn 仍可能产生多个独立客户端请求。
-- 上游 HTTP 错误保留状态和错误体，不再将 429/400 统一映射成 502。连接失败没有可转发的上游 HTTP 响应时仍返回代理错误，不自动重试。
-- raw Responses 请求通过有界通知队列逐块转发并 flush 到 HTTP 客户端，不再等待整包响应；1 小时仅是 raw 控制通道等待上限，其他控制操作仍为 30 秒。客户端自身超时或重试仍可能发起新的独立请求，代理不做跨请求去重，也不承诺降低每次有效请求的 prompt token。
-- 开发验证记录：528 项相关测试通过，真实 app-server 连接模拟上游的链路测试通过；服务器本机实测 `gpt-5.6-luna` 返回完整 `OK` 回复，且真实上游 turn-state 成功回传。
-- 截至上述验证记录，公网 `18876` 仍存在 TCP 连接超时；主机监听及防火墙检查未发现阻断，云安全组或外部网络入口仍待核对。该问题不属于本次字段处理已经解决的范围。
+- 共享策略：普通/未知业务头保留，凭证与逐跳字段排除，大小写重复与长度限制有效。
+- 代理 HTTP → RPC：业务头不丢，队列信封与客户端身份凭证不泄漏。
+- app-server RPC → 模拟上游：业务头真实到达 HTTP 接收端，服务端 session/thread/请求 ID 取代客户端值，正文保持既定规则。
+- 线上实际发送边界：对照同一请求的客户端与上游记录，逐个比较应保留字段；不能仅凭 HTTP 200 判定头完整。
+- metadata 回归：header-only、body-only、两处同时存在、工具续接、父子关联以及持久绑定。
 
-**总结：安装、会话、线程及窗口身份按真实池会话对齐；根/父 turn 无值时清理旧值；路由与追踪值按白名单传递；缺失的推理调用 ID 自动生成；User-Agent 和上游鉴权交由真实 Codex 传输层管理。**
+管理页捕获的是应用 HTTP 发送边界，不是完整网络抓包。Host、Content-Length、User-Agent 等可能在此边界之后由 HTTP 客户端添加，不能仅因快照缺失就判定未发送。

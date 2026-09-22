@@ -597,11 +597,17 @@ Enable `capabilities.experimentalApi` during initialization, then use `thread/li
 Enable `capabilities.experimentalApi` during initialization. `thread/modelIdentity/list` returns the current model-request identity for each loaded thread. Turn fields are `null` before a thread starts its first turn. While a turn is active they describe that turn; after completion, the response retains the latest persisted `turnId` and `rootTurnId` when available.
 
 The experimental raw Responses adapter accepts `turn/start.rawResponses` and
-optional `rawResponsesHeaders`. The latter permits only `x-codex-turn-state`,
-`x-codex-inference-call-id`, `traceparent`, `tracestate`, `x-codex-turn-metadata`,
-`x-codex-installation-id`, `x-codex-window-id`, and `x-codex-parent-thread-id`
-(case-insensitive, at most twelve entries, 8192 bytes per value, no duplicate names
-or invalid HTTP values). A missing inference ID receives a fresh UUID for that
+optional `rawResponsesHeaders`. Application headers, including unknown names and
+`x-openai-internal-codex-responses-lite`, are preserved by default using the same
+`codex-http-client` policy as the HTTP proxy. The limit is 128 entries, 256 bytes
+per name, 8192 bytes per value and 64 KiB total. Invalid values and duplicate
+case-insensitive names are rejected. Caller credentials/account selection,
+cookies, User-Agent, originator, session-id/thread-id/x-client-request-id,
+`x-oai-attestation`, queue/proxy provenance, HTTP framing/compression and hop-by-hop
+headers (including Connection-nominated names) are removed. The upstream transport
+supplies its own credentials and identities; raw forwarding does not regenerate
+attestation. See the [field policy](../responses-api-proxy/FIELD_HANDLING_SUMMARY.md)
+for the full exception list. A missing inference ID receives a fresh UUID for that
 request. Existing non-null installation/session/thread/window fields in the body
 are aligned with the selected thread. Caller-mapped turn, context-window, parent,
 and workspace metadata is preserved, including its header/body location. Absent

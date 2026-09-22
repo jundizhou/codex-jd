@@ -88,6 +88,12 @@ async def main():
                     assert not any(
                         "queue" in name for name in params["rawResponsesHeaders"]
                     )
+                    if tag == "a":
+                        forwarded = params["rawResponsesHeaders"]
+                        assert {
+                            key: forwarded[key] for key in preserved_headers
+                        } == preserved_headers
+                        assert not set(private_headers) & set(forwarded)
                     request_bodies[tag] = body
                     active.add(thread)
                     calls.append((tag, time.monotonic(), thread))
@@ -212,7 +218,26 @@ async def main():
 
                     gates["a"] = asyncio.Event()
                     gates["b"] = asyncio.Event()
-                    a = asyncio.create_task(send("a", "A"))
+                    preserved_headers = {
+                        "x-openai-internal-codex-responses-lite": "true",
+                        "x-codex-beta-features": "feature-a,feature-b",
+                        "x-future-header": "opaque value",
+                    }
+                    private_headers = {
+                        "cookie": "client-cookie",
+                        "user-agent": "client-agent",
+                        "originator": "client-originator",
+                        "chatgpt-account-id": "client-account",
+                        "x-oai-attestation": "client-signature",
+                        "x-forwarded-for": "client-ip",
+                    }
+                    a = asyncio.create_task(
+                        send(
+                            "a",
+                            "A",
+                            queue_headers={**preserved_headers, **private_headers},
+                        )
+                    )
                     b = asyncio.create_task(send("b", "B"))
                     await until(lambda: len(calls) == 2)
                     cancelled = asyncio.create_task(send("cancel-me", "C"))
@@ -566,13 +591,12 @@ async def main():
                     assert len(probe_calls) == 2
                     assert 19 <= probe_calls[1] - probe_calls[0] <= 24
                     assert queue["recovery"]["released_unknown"] == 1
-                    assert (await incremental)[0] == 409
+                    assert await incremental == (200, wire)
                     assert await waiting == (200, wire)
-                    assert (
-                        len(calls) == before + 1 and calls[-1][0] == "auto-waiting"
-                    ), "only the waiting request may reach the model"
-                    new_thread = calls[-1][2]
-                    assert new_thread != old_thread
+                    assert [(tag, thread) for tag, _, thread in calls[before:]] == [
+                        ("auto-incremental", old_thread),
+                        ("auto-waiting", old_thread),
+                    ], "verified recovery must preserve the original conversation"
                     status, body = await send("auto-truncated", "auto-broken")
                     assert (
                         status == 409
@@ -585,7 +609,7 @@ async def main():
                         "auto-broken",
                         extra={"previous_response_id": "known"},
                     ) == (200, wire)
-                    assert calls[-1][2] == new_thread
+                    assert calls[-1][2] == old_thread
                     assert (await send("auto-truncated", "auto-broken"))[0] == 409
                     (root / "auth.json").write_text(
                         json.dumps({"tokens": {"account_id": "different"}})

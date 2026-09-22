@@ -5,6 +5,7 @@ mod client_builder;
 mod custom_ca;
 mod error;
 mod outbound_proxy;
+mod raw_responses_headers;
 mod request;
 mod request_capture;
 mod route_aware_client_pool;
@@ -44,6 +45,7 @@ pub use crate::outbound_proxy::RouteFailureClass;
 pub use crate::outbound_proxy::cache_system_proxy_route_for_test;
 #[cfg(target_os = "macos")]
 pub use crate::outbound_proxy::macos_system_proxy_configuration;
+pub use crate::raw_responses_headers::raw_responses_headers;
 pub use crate::request::EncodedJsonBody;
 pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;

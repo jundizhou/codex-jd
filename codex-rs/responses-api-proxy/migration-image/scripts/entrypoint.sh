@@ -94,6 +94,7 @@ pid /tmp/migration-nginx.pid;
 error_log /dev/stderr warn;
 events { worker_connections 1024; }
 http {
+    underscores_in_headers on;
     map_hash_bucket_size 128;
     access_log off;
     client_body_temp_path /tmp/client_body;
@@ -118,7 +119,8 @@ http {
             if (\$authorized = 0) { return 401; }
             proxy_pass http://127.0.0.1:8787;
             proxy_http_version 1.1;
-            proxy_set_header Connection "";
+            # Preserve Connection nominations until the proxy removes hop-by-hop fields.
+            proxy_set_header Connection \$http_connection;
             proxy_set_header Authorization \$http_authorization;
             proxy_buffering off;
             proxy_request_buffering off;

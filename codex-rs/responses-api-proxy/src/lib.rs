@@ -503,26 +503,25 @@ fn forward_request_with_identity(
             })
             .ok()
     });
-    let mut headers = std::collections::HashMap::new();
-    for header in req.headers() {
-        let name = header.field.as_str().to_ascii_lowercase().to_string();
-        if matches!(
-            name.as_str(),
-            "x-codex-turn-state"
-                | "x-codex-inference-call-id"
-                | "traceparent"
-                | "tracestate"
-                | "x-codex-turn-metadata"
-                | "x-codex-installation-id"
-                | "x-codex-window-id"
-                | "x-codex-parent-thread-id"
-        ) && (header.value.len() > 8192
-            || headers.insert(name, header.value.to_string()).is_some())
-        {
+    let headers = match codex_http_client::raw_responses_headers(
+        req.headers()
+            .iter()
+            .map(|header| (header.field.as_str().as_str(), header.value.as_str())),
+    ) {
+        Ok(headers) => headers
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_owned(),
+                    value.to_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect(),
+        Err(error) => {
             req.respond(Response::new_empty(StatusCode(400)))?;
-            anyhow::bail!("oversized or duplicate routing/tracing header");
+            anyhow::bail!(error);
         }
-    }
+    };
     let rewritten = match rewrite_request(
         &body,
         headers,

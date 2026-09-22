@@ -204,7 +204,31 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
         ),
         ("tracestate".to_string(), "vendor=value".to_string()),
+        (
+            "x-openai-internal-codex-responses-lite".into(),
+            "true".into(),
+        ),
+        ("x-codex-beta-features".into(), "feature-a,feature-b".into()),
+        ("x-future-header".into(), "opaque value".into()),
     ]);
+    let mut incoming_headers = supplied_headers.clone();
+    for name in [
+        "authorization",
+        "cookie",
+        "user-agent",
+        "originator",
+        "chatgpt-account-id",
+        "x-oai-attestation",
+        "session-id",
+        "thread-id",
+        "x-client-request-id",
+        "x-codex-queue-principal",
+        "x-forwarded-for",
+        "x-hop-only",
+    ] {
+        incoming_headers.insert(name.into(), "client-must-not-leak".into());
+    }
+    incoming_headers.insert("connection".into(), "X-Hop-Only".into());
     let response: TurnStartResponse = app
         .request(|request_id| ClientRequest::TurnStart {
             request_id,
@@ -212,7 +236,7 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
                 thread_id: thread.id,
                 input: vec![],
                 raw_responses: Some(raw_request.clone()),
-                raw_responses_headers: Some(supplied_headers.clone()),
+                raw_responses_headers: Some(incoming_headers),
                 ..Default::default()
             },
         })
@@ -264,6 +288,21 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     for (name, value) in supplied_headers {
         assert_eq!(request.headers.get(&name).unwrap().to_str()?, value);
     }
+    assert!(
+        request
+            .headers
+            .values()
+            .all(|value| value != "client-must-not-leak")
+    );
+    assert_eq!(
+        ["session-id", "thread-id", "x-client-request-id"]
+            .map(|name| request.headers[name].to_str().unwrap()),
+        [
+            identity.session_id.as_str(),
+            identity.thread_id.as_str(),
+            identity.thread_id.as_str()
+        ]
+    );
     assert!(
         request.headers["user-agent"]
             .to_str()?
