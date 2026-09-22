@@ -41,6 +41,7 @@ mod queue_http;
 mod queue_signals;
 mod queue_store;
 mod queue_throttle;
+mod quota_cache;
 mod raw_response_stream;
 mod request_metrics;
 mod rewrite;
@@ -552,6 +553,9 @@ fn forward_request_with_identity(
     if let Some(path) = &capture_path {
         let _ = std::fs::remove_file(path);
     }
+    let quota_key = admin_accounts::read_auth(&config.auth_path)
+        .ok()
+        .map(|auth| quota_cache::key(&auth));
     let raw_result = config.identity_client.run_raw_response(
         &effective_identity.thread_id,
         rewritten.body,
@@ -573,6 +577,9 @@ fn forward_request_with_identity(
         }
     };
     let status_code = result.status;
+    if let Some(key) = quota_key {
+        quota_cache::CACHE.observe(&key, &result.headers, queue_store::now());
+    }
     let status = StatusCode(status_code);
     let content_type = result
         .headers

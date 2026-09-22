@@ -304,7 +304,7 @@ pub(crate) fn read_auth(path: &Path) -> anyhow::Result<Value> {
     Ok(value)
 }
 
-fn write_private(path: &Path, value: &Value) -> anyhow::Result<()> {
+pub(crate) fn write_private(path: &Path, value: &Value) -> anyhow::Result<()> {
     let temp = path.with_extension("pending");
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

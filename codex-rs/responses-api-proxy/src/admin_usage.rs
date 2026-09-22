@@ -1,10 +1,7 @@
 //! Read-only per-profile quota queries; never activates an account or runs inference.
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::sync::LazyLock;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -20,24 +17,13 @@ use tiny_http::StatusCode;
 use crate::monitored_request::Request;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-#[derive(Default)]
-struct Queries {
-    active: HashSet<String>,
-    cached: HashMap<String, (Instant, Value)>,
-}
-static QUERIES: LazyLock<Mutex<Queries>> = LazyLock::new(|| Mutex::new(Queries::default()));
-
-struct QueryPermit(String);
+static WORKERS: AtomicUsize = AtomicUsize::new(0);
+struct QueryPermit;
 impl Drop for QueryPermit {
     fn drop(&mut self) {
-        QUERIES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .active
-            .remove(&self.0);
+        WORKERS.fetch_sub(1, Ordering::AcqRel);
     }
 }
-
 pub(crate) fn respond(req: Request, profile: String, credentials: Result<Value>) {
     let auth = match credentials {
         Ok(auth) => auth,
@@ -46,58 +32,37 @@ pub(crate) fn respond(req: Request, profile: String, credentials: Result<Value>)
             return;
         }
     };
-    let key = crate::queue_store::digest(&[auth.to_string().as_bytes()]);
+    if WORKERS
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            (n < 4).then_some(n + 1)
+        })
+        .is_err()
     {
-        let mut state = QUERIES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((at, value)) = state.cached.get(&key)
-            && at.elapsed() < Duration::from_secs(/*secs*/ 30)
-        {
-            let mut value = value.clone();
-            value["profile"] = json!(profile);
-            value["cached"] = json!(true);
-            drop(state);
-            reply(req, /*status*/ 200, value);
-            return;
-        }
-        if state.active.len() >= 4 || !state.active.insert(key.clone()) {
-            drop(state);
-            reply(
-                req,
-                /*status*/ 429,
-                json!({"error":"额度查询正在进行，请稍后重试"}),
-            );
-            return;
-        }
+        reply(
+            req,
+            /*status*/ 429,
+            json!({"error":"额度查询繁忙，请稍后重试"}),
+        );
+        return;
     }
-    // Network I/O must not block the proxy's HTTP accept loop or request queue.
     std::thread::spawn(move || {
-        let _permit = QueryPermit(key.clone());
-        let result = query(&auth, USAGE_URL);
-        match result {
+        let _permit = QueryPermit;
+        match cached(&auth, crate::quota_cache::Freshness::Manual) {
             Ok(mut value) => {
                 value["profile"] = json!(profile);
-                value["cached"] = json!(false);
-                let mut state = QUERIES
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if state.cached.len() >= 64
-                    && let Some(oldest) = state
-                        .cached
-                        .iter()
-                        .min_by_key(|(_, (at, _))| *at)
-                        .map(|(key, _)| key.clone())
-                {
-                    state.cached.remove(&oldest);
-                }
-                state.cached.insert(key, (Instant::now(), value.clone()));
-                drop(state);
                 reply(req, /*status*/ 200, value);
             }
             Err(error) => reply(req, /*status*/ 502, json!({"error":error.to_string()})),
         }
     });
+}
+pub(crate) fn cached(auth: &Value, mode: crate::quota_cache::Freshness) -> Result<Value> {
+    crate::quota_cache::CACHE.get(
+        crate::quota_cache::key(auth),
+        mode,
+        crate::queue_store::now(),
+        || query(auth, USAGE_URL),
+    )
 }
 
 fn reply(req: Request, status: u16, value: Value) {
@@ -150,12 +115,17 @@ fn query(auth: &Value, url: &str) -> Result<Value> {
             .header("OpenAI-Beta", "codex-1").header("originator", "Codex Desktop")
             .header("User-Agent", "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)")
             .timeout(Duration::from_secs(/*secs*/ 15)).send().await.context("额度查询连接失败或超时，请稍后重试")?;
-        match response.status().as_u16() {
-            200 => {},
-            401 => anyhow::bail!("账号认证已失效，请重新授权后查询"),
-            403 => anyhow::bail!("上游拒绝额度查询，请检查账号权限或网络出口"),
-            429 => anyhow::bail!("上游额度查询过于频繁，请稍后重试"),
-            status => anyhow::bail!("上游额度查询失败（HTTP {status}）"),
+        let status = response.status().as_u16();
+        if status != 200 {
+            let message = match status {
+                401 => "账号认证已失效，请重新授权后查询".to_owned(),
+                403 => "上游拒绝额度查询，请检查账号权限或网络出口".to_owned(),
+                429 => "上游额度查询过于频繁，请稍后重试".to_owned(),
+                _ => format!("上游额度查询失败（HTTP {status}）"),
+            };
+            let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok())
+                .and_then(|v| crate::queue_throttle::retry_after(v, SystemTime::now())).map(|d| d.as_secs());
+            return Err(crate::quota_cache::Failure {message,retry_after,auth_invalid: status == 401}.into());
         }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.context("读取额度数据失败")? {
