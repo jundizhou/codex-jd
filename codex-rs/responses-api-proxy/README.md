@@ -144,7 +144,7 @@ timing-evidence cache, loaded threads and durable identities have separate limit
 The index retains up to 4096 identities for 30 days of inactivity. Retention/capacity
 cleanup deletes only idle threads owned by this index. It stores no request bodies
 or routing tokens. Authentication must be file-backed; account changes require a
-drained Worker restart and cannot reuse another account's mapping. Missing mappings
+drained, acknowledged account transition and cannot reuse another account's mapping. Missing mappings
 may be rebuilt only for self-contained input. Requests using previous response IDs,
 conversation references, routing state, item references or dangling tool outputs
 still receive `conversation_binding_lost` when their identity is missing. Original
@@ -205,8 +205,10 @@ Authenticated controls:
   extra credit balances and reset-credit counts when supplied by the upstream.
   Missing windows or percentages remain unknown. API-key accounts are unsupported;
   expired saved credentials require reauthorization. Successes are cached for 30
-  seconds per credential fingerprint (up to 64 entries); duplicate in-flight
-  queries and more than four concurrent queries receive 429. Upstream I/O has a
+  seconds per credential fingerprint (up to 64 persisted entries); concurrent
+  reads share one fetch, and more than four UI queries receive 429. Failures use
+  60/300/900-second backoff plus upstream Retry-After; invalid auth is not queried
+  again until credentials change. Upstream I/O has a
   15-second timeout and a 1 MiB response cap, and runs outside the HTTP accept loop.
   Upstream authentication errors are reported as query errors, not management-token
   failures. Credentials and upstream account/email identifiers are not returned.
@@ -217,7 +219,10 @@ Authenticated controls:
 - `POST /admin/api/switch` with `{"profile": name}`: makes a stored profile the
   active account. The current login is saved back to its profile (or auto-backed
   up on its first switch) so refreshed tokens are not lost. Switching is refused
-  while any request is running, queued or outcome-unknown.
+  while a result is unknown. Otherwise dispatch is gated while running requests
+  finish, preserving bounded pending work. The gate remains closed until cached
+  auth and the loaded account identity have been acknowledged; failed activation
+  restores and verifies the previous credentials. A failed rollback stops dispatch.
 - `POST /admin/api/delete` with `{"profile": name}`: removes a stored profile.
   The active account cannot be deleted; switch away first.
 - `POST /admin/api/concurrency` with `{"limit": n}`: adjusts the maximum
@@ -302,6 +307,47 @@ limits, authenticated controls and repeated proxy restarts with the journal:
 python tests/smoke_queue.py --proxy /absolute/path/to/codex-responses-api-proxy
 ```
 
+## Automatic account rotation
+
+`POST /admin/api/rotation` accepts `{"enabled": true, "priority": ["pro-2", "plus-1"]}`.
+The console exposes this switch, priority order, per-profile cached quota, next
+eligible check, and the latest switch results. It defaults to disabled; settings
+and the last 50 events persist in `account-rotation.json` beside auth.json.
+
+With request demand, current-account snapshots are refreshed at most once per
+10 minutes above 10% remaining, or every 2 minutes at 2–10%. No recurring network
+poll happens when idle. Remaining quota is the minimum known window in the main
+Codex limit only; feature-specific Spark/review limits do not rotate the account.
+Missing quota remains unknown. Existing response quota headers update the cached
+windows without extra usage calls. UI and automatic checks share a bounded cache.
+
+At <=2%, or explicit quota/auth failure, future dispatch is held. A candidate must
+have confirmed remaining quota >5%, with all advertised main windows known.
+Only candidates needed for a switch are queried; fresh candidate queries are at
+least 30 seconds apart. Low accounts wait for the relevant reset time (15 minutes
+when unknown), and failed activations cool down for 15 minutes. Authentication
+failure waits for new credentials. Candidates with missing quota are skipped.
+
+A single coordinator serializes automatic and manual auth changes. It drains
+actual leases for up to 90 seconds without discarding pending requests, then
+applies credentials, confirms the cached token locally, verifies the account ID
+with one usage RPC, and reloads identity bindings. This verification occurs only
+at activation/rollback, not as a periodic quota poll. It never replays an inference.
+Timeout/unknown outcomes leave the previous account in place; failed credential
+rollback gates the worker. Queue deadlines and bounds continue to apply while
+waiting for a usable account. Existing manual pause remains authoritative.
+
+Requests referencing old-account response IDs, routing state, item references,
+encrypted reasoning/arguments, or unmatched tool output cannot migrate silently;
+missing same-account bindings return `conversation_binding_lost`. A full independent
+request may get a fresh binding. This is single-active-account rotation, not a
+promise that server-bound conversations can continue across different accounts.
+
+The old shell auto-switcher is no longer launched. Auth and quota cache files are
+host-local; snapshots contain credential fingerprints, not credentials. Preserve
+`account-quota-cache.json` with the account settings across upgrades. Polling and
+upstream reporting delay mean the reserve is a trigger, not a guaranteed minimum.
+
 ## Request Preservation
 
 The proxy sends the complete incoming JSON object through the experimental
@@ -313,7 +359,31 @@ bound server thread. Turn and context-window IDs use stable mappings; parent
 thread aliases and optional five-profile workspace metadata persist across
 restart. Fields stay in their original headers or metadata objects. Missing
 metadata fields are not added and explicit nulls are preserved. Other JSON
-content, including input, tools and instructions, is unchanged.
+content, including input, tools and instructions, is unchanged except for the
+HTTP worker's SDK compatibility rules:
+
+- Missing `store` defaults to `false`. Explicit values, including null, remain
+  subject to upstream validation.
+- Upstream requests always use `stream: true`. Callers that set `stream: true`
+  receive the original SSE bytes; omitted, null or false requests receive a JSON
+  Response assembled from the upstream terminal event.
+- `max_output_tokens` is removed because the Codex backend does not support it.
+  A supplied positive limit is **not enforced**. The response includes
+  `x-codex-ignored-parameters: max_output_tokens` and
+  `x-codex-output-token-limit: not-enforced`. Null is removed without a warning;
+  invalid types or nonpositive limits are rejected with HTTP 400.
+
+Nonstream JSON preserves terminal status and actual usage. When the terminal
+Response omits output, complete `response.output_item.done` items restore messages,
+tool calls and reasoning in output-index order. A completed response with unfinished
+items, or a missing, malformed or truncated terminal event, produces HTTP 502
+instead of a fabricated success. Each SSE line/event and the accumulated output
+are bounded to 4 MiB, with at most 4096 output items. Upstream HTTP errors retain
+their status and body.
+A minimal SDK request needs `model` and a list-valued `input`; instructions,
+tools, reasoning and text options are optional and are not invented.
+The app-server supplies missing transport identities and the inference-call ID.
+Sub2API's strict path still passes the original body bytes to this worker unchanged.
 
 The HTTP proxy and app-server share `codex_http_client::raw_responses_headers`.
 Application headers are preserved by default, including unknown headers,
@@ -331,6 +401,10 @@ in the application capture, regardless of the host OS. Caller `x-oai-attestation
 its signature is bound to the original client; the raw adapter does not generate
 a replacement. HTTP framing, compression negotiation and hop-by-hop headers,
 including names nominated by Connection, belong to the outgoing transport.
+CDN routing and ingress credentials (`CF-*`, `CDN-Loop`), proxy client-address
+fields, and browser context (`Origin`, `Referer`, `Sec-Fetch-*`, `Sec-CH-UA*`)
+are removed at this boundary. SDK diagnostics (`x-stainless-*`) and application
+tracing (`traceparent`, `tracestate`, `baggage`, `X-Request-ID`) remain intact.
 See [the complete field rules](FIELD_HANDLING_SUMMARY.md) for exact exceptions.
 
 Existing inference-call IDs and tracing headers are preserved. A missing

@@ -48,6 +48,7 @@ mod raw_response_stream;
 mod request_metrics;
 mod rewrite;
 mod scheduler;
+mod sdk_compat;
 mod session_pool;
 mod stream_http;
 use affinity::key_for_http_request;
@@ -552,7 +553,7 @@ fn forward_request_with_identity(
             anyhow::bail!(error);
         }
     };
-    let rewritten = match rewrite_request(
+    let mut rewritten = match rewrite_request(
         &body,
         headers,
         &effective_identity,
@@ -565,6 +566,25 @@ fn forward_request_with_identity(
                     .with_status_code(StatusCode(400)),
             )?;
             return Err(error.context("rewriting request metadata"));
+        }
+    };
+    let compatibility = match sdk_compat::Compatibility::prepare(&mut rewritten.body) {
+        Ok(compatibility) => compatibility,
+        Err(error) => {
+            req.respond(
+                Response::from_string(
+                    serde_json::json!({"error": {
+                        "type": "invalid_request_error", "message": error.to_string()
+                    }})
+                    .to_string(),
+                )
+                .with_header(
+                    Header::from_bytes("content-type", "application/json")
+                        .map_err(|()| std::io::Error::other("invalid JSON content type"))?,
+                )
+                .with_status_code(StatusCode(400)),
+            )?;
+            return Err(error.context("preparing SDK request"));
         }
     };
     let capture_path = std::env::var_os("CODEX_HTTP_CAPTURE_DIR")
@@ -614,7 +634,7 @@ fn forward_request_with_identity(
         .get("content-type")
         .map(String::as_str)
         .unwrap_or_else(|| {
-            if status_code < 400 && body_contains_stream(&body) {
+            if status_code < 400 {
                 "text/event-stream"
             } else {
                 "application/json"
@@ -639,7 +659,7 @@ fn forward_request_with_identity(
     } else {
         Box::new(response_body)
     };
-    stream_http::respond(req, status, &response_headers, response_body)?;
+    compatibility.respond(req, status, response_headers, response_body)?;
     eprintln!(
         "responses-proxy request_end id={request_id} thread_id={} raw_calls=1 status={} elapsed_ms={}",
         effective_identity.thread_id,
@@ -647,11 +667,4 @@ fn forward_request_with_identity(
         started_at.elapsed().as_millis()
     );
     Ok(())
-}
-
-fn body_contains_stream(body: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| value.get("stream").and_then(Value::as_bool))
-        .unwrap_or(false)
 }

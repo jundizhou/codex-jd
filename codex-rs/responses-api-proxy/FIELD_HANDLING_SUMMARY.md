@@ -1,6 +1,6 @@
 # Codex 代理字段处理汇总
 
-更新日期：2026-09-21。本文描述当前字段处理规则；线上验收记录与具体镜像版本单独保存。
+更新日期：2026-09-22。本文描述当前字段处理规则；线上验收记录与具体镜像版本单独保存。
 
 ## 一、总体原则
 
@@ -9,7 +9,7 @@
 **普通业务请求头默认保留；指定身份字段稳定替换；上游凭证和传输字段由服务器管理。**
 代理与 app-server 共用 `codex-http-client` 的 `raw_responses_headers` 规则，不再分别维护允许头名称的白名单。
 字段仍留在原来的 header 或 JSON 位置；不存在的 metadata 字段不新增，已有 null 保留。
-JSON 内容保持语义一致，不保证空白、键顺序或 HTTP 头名称大小写逐字节一致。
+除第五节明确列出的 SDK 兼容规则外，JSON 内容保持语义一致；不保证空白、键顺序或 HTTP 头名称大小写逐字节一致。
 
 ## 二、身份与工作区替换
 
@@ -67,6 +67,8 @@ Lite 验收请求使用 `reasoning.context=all_turns`、`parallel_tool_calls=fal
 | `Cookie` / `Cookie2` / `Set-Cookie` | 不转发客户端 cookie 或以请求头夹带的 Set-Cookie；服务端自身 cookie store 仍由真实 transport 管理。 |
 | `x-codex-queue-*` | 内部调度信封，只用于 Worker，不发送给上游。 |
 | `Forwarded` / `Via` / `X-Real-IP` / `X-Forwarded-*` | 不泄漏入口或中间代理的来源信息。 |
+| `CF-*` / `CDN-Loop` / `True-Client-IP` / `Fastly-Client-IP` / `X-Envoy-External-Address` | 移除 CDN 路由、入口凭证及代理来源地址，避免泄漏凭证或触发 CDN 循环检查。 |
+| `Origin` / `Referer` / `Sec-Fetch-*` / `Sec-CH-UA*` | 浏览器对入口站点的上下文不带入上游；SDK 的 `x-stainless-*` 与业务追踪头仍保留。 |
 | `Host` / `Content-Length` / `Content-Encoding` / `Accept-Encoding` / `Expect` | 由实际目标、重新序列化的 JSON 及服务端传输能力决定，不沿用入站长度或压缩状态。 |
 | `Connection` / `Keep-Alive` / `Proxy-Connection` / `Proxy-Authenticate` / `TE` / `Trailer` / `Transfer-Encoding` / `Upgrade` | 逐跳字段不跨代理转发；Connection 点名的其他字段也移除。 |
 
@@ -75,11 +77,27 @@ Lite 验收请求使用 `reasoning.context=all_turns`、`parallel_tool_calls=fal
 
 ## 五、正文及响应边界
 
-`model`、`input`、`instructions`、工具定义/结果、sandbox 设置、`stream`、`previous_response_id`、普通 `metadata` 和其他非指定身份位置保持不变。
+`model`、`input`、`instructions`、工具定义/结果、sandbox 设置、`previous_response_id`、普通 `metadata` 和其他非指定身份位置保持不变。
 代理不执行工具、不追加 prompt、不重建历史、不运行 Agent loop。
 
-本次更改只扩展请求头保留规则。响应头仍限于 `x-codex-turn-state`、`retry-after`、`content-type`；不转发上游 Set-Cookie。
-响应的状态和流式 body 按 raw 通道返回。每个请求独立处理路由状态；工具续接由客户端携带历史与对应 call_id。
+HTTP Worker 自动适配普通 SDK 的三个参数：
+
+| 参数 | 服务端处理 |
+| --- | --- |
+| `store` | 缺省补 `false`；已有值（包括 null）保留，由上游校验。 |
+| `stream` | 上游固定为 `true`。客户端为 `true` 时原样返回 SSE；缺省、null 或 `false` 时收集终态事件并返回普通 Response JSON。非法类型返回 400。 |
+| `max_output_tokens` | 上游不支持，发送前移除。**客户端给出的输出上限不会执行**；正整数会附带响应头 `x-codex-ignored-parameters: max_output_tokens`、`x-codex-output-token-limit: not-enforced`。null 移除且不提示；非法类型或非正数返回 400。 |
+
+普通 SDK 最小请求只需 `model` 和列表形式的 `input`。
+不补入可选的 instructions、tools、reasoning、text 或 Lite 模式标记。
+会话/线程身份与缺省 inference-call ID 由既有 transport 机制提供。
+这些适配仅在 Worker 侧发生；Sub2API 严格透传到 Worker 的正文仍逐字节不变。
+
+响应头保留路由状态、重试提示、媒体类型和已允许的额度信息；不转发上游 Set-Cookie。
+流式调用保留原始 SSE；非流式调用保留终态 Response 的真实用量与 completed/failed/incomplete 状态。
+Codex 终态可能不带 output，此时按 output_index 排序收集完整的 output_item.done，保留消息、工具调用与 reasoning。
+单行、单个 SSE 事件及累计 output 限制为 4 MiB，最多 4096 个输出项；completed 缺失完整输出项、缺少终态、损坏或截断的流返回 HTTP 502，不返回伪造的成功结果。
+上游 HTTP 错误保留状态码和正文。每个请求独立处理路由状态；工具续接由客户端携带历史与对应 call_id。
 
 ## 六、验证要求
 
