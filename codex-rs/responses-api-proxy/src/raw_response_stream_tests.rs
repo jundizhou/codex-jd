@@ -108,7 +108,8 @@ async fn disconnected_relay(
             &mut client,
             json!({"rawResponses":{"stream":true}}),
             &sender,
-            Some(&lease.dispatch)
+            Some(&lease.dispatch),
+            /*recorder*/ None
         ),
         peer,
     );

@@ -91,7 +91,7 @@ Conversation intervals start at confirmed upstream completion. Time spent
 executing client tools counts toward the gap. The bounded observer matches
 history-prefix digests or a known previous response ID, then validates new tool
 outputs. An old tool output somewhere in the history is insufficient. It keeps
-at most 64 call IDs for five minutes, with a 256 KiB observation limit per event;
+at most 64 call IDs for five minutes, with a 4 MiB observation limit per event in durable queue mode;
 missing, oversized or malformed evidence falls back to the unknown interval.
 Forwarded request content and response octets are not changed by observation.
 A fully delimited named SSE terminal event can confirm completion even if its
@@ -150,6 +150,30 @@ conversation references, routing state, item references or dangling tool outputs
 still receive `conversation_binding_lost` when their identity is missing. Original
 input and tool outputs are never modified to make a continuation appear complete.
 Local identity-control failures return 503 `worker_identity_unavailable`.
+
+When no explicit session/thread/conversation metadata is present, queue mode
+matches references from previously observed upstream output before admission:
+`previous_response_id`, output item `id`, `encrypted_content`,
+`encrypted_function_args`, and tool `call_id`. All supplied references must
+resolve to the same conversation for the trusted caller and current upstream
+account. Conflicting ownership returns 409 `continuation_conflict`; missing,
+expired, cross-caller or cross-account references return 409
+`conversation_binding_lost`. Explicit identifiers retain the existing priority
+and binding rules. User/system/developer message IDs are not continuation evidence.
+
+The separate `*.continuations.json` index retains only reference hashes and
+conversation ownership: at most 16,384 references, 16 MiB on disk, 30 days, and
+4,096 distinct references per request. References are recorded atomically before
+forwarding the corresponding SSE bytes, allowing immediate tool results to join
+the original conversation queue. Original identity recovery checks still apply
+after interrupted requests or restart. Identity deletion removes its references;
+ambiguous-reference tombstones persist until expiry or capacity eviction. Preserve
+this file with the journal and conversation registry during backup and migration.
+Outputs from before this feature was deployed cannot be automatically matched.
+No-reference self-contained requests create a new conversation; no text similarity
+or latest-request heuristic is used. Matching a response ID does not make an
+unstored upstream response retrievable: clients using `store:false` must continue
+to replay the complete output history, including reasoning and tool calls.
 
 Unknown outcomes each retain one execution slot and block their own conversation,
 including after restart. Other conversations may use the remaining capacity.

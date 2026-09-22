@@ -68,6 +68,7 @@ struct ServerInfo {
 }
 
 struct ForwardConfig {
+    continuations: Option<Arc<std::sync::Mutex<continuation_index::Index>>>,
     metadata_profiles: Option<metadata_profiles::Profiles>,
     identity_client: Arc<AppServerIdentityClient>,
     worker_api_key: Option<String>,
@@ -172,6 +173,10 @@ pub fn run_main(args: Args) -> Result<()> {
         )?),
         None => IdentityMode::Pool(session_pool_size),
     };
+    let continuations = match &mode {
+        IdentityMode::Durable(conversations) => Some(Arc::clone(&conversations.continuations)),
+        IdentityMode::Pool(_) => None,
+    };
     let app_server_socket = resolve_socket_arg(args.app_server_socket.clone())?;
     let (identity_client, identities) = AppServerIdentityClient::start(app_server_socket, mode)
         .context("starting proxy identity manager")?;
@@ -218,6 +223,7 @@ pub fn run_main(args: Args) -> Result<()> {
         .transpose()
         .context("loading persistent metadata profiles")?;
     let forward_config = Arc::new(ForwardConfig {
+        continuations,
         metadata_profiles,
         identity_client,
         worker_api_key,
@@ -429,21 +435,56 @@ fn forward_request(
                 .as_nanos(),
             PROXY_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         );
-        let pending = match queue_http::pending(&req, &body, received, fallback) {
+        let mut pending = match queue_http::pending(&req, &body, received, fallback) {
             Ok(pending) => pending,
             Err(error) => {
                 req.respond(Response::new_empty(StatusCode(400)))?;
                 return Err(error);
             }
         };
+        let request_body: Value = serde_json::from_slice(&body)?;
+        let account = match conversations::account(&config.auth_path) {
+            Ok(account) => account,
+            Err(error) => {
+                queue_http::error(req, scheduler::Rejection::IdentityUnavailable);
+                return Err(error);
+            }
+        };
+        let mut matched = false;
+        if !pending.sticky
+            && let Some(index) = &config.continuations
+        {
+            let resolved = index
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .resolve(&pending.key.0, &account, &request_body);
+            match resolved {
+                Ok(Some(conversation)) => {
+                    pending.key.1 = conversation;
+                    pending.sticky = true;
+                    matched = true;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    queue_http::error(req, error);
+                    return Ok(());
+                }
+            }
+            // Generated conversation keys also retain scheduling signals for
+            // the first automatically matched continuation.
+            pending.sticky = true;
+        }
         let key = pending.key.digest();
         let routing = req
             .headers()
             .iter()
             .find(|header| header.field.equiv("x-codex-turn-state"))
             .map(|header| header.value.as_str());
-        let continuation =
-            conversations::Continuation::from_request(&serde_json::from_slice(&body)?, routing);
+        let continuation = if matched {
+            conversations::Continuation::RequiresIdentity
+        } else {
+            conversations::Continuation::from_request(&request_body, routing)
+        };
         let lease = match queue.acquire(pending) {
             Ok(lease) => lease,
             Err(error) => {
@@ -451,6 +492,10 @@ fn forward_request(
                 return Ok(());
             }
         };
+        if matched && conversations::account(&config.auth_path)? != account {
+            queue_http::error(req, scheduler::Rejection::BindingLost);
+            return Ok(());
+        }
         let identity = match config
             .identity_client
             .acquire_conversation(key, continuation)
@@ -605,11 +650,20 @@ fn forward_request_with_identity(
     let quota_key = admin_accounts::read_auth(&config.auth_path)
         .ok()
         .map(|auth| quota_cache::key(&auth));
+    let recorder = match (&config.continuations, lease) {
+        (Some(index), Some(lease)) => Some(continuation_index::Recorder {
+            index: Arc::clone(index),
+            account: conversations::account(&config.auth_path)?,
+            key: lease.key.clone(),
+        }),
+        _ => None,
+    };
     let raw_result = config.identity_client.run_raw_response(
         &effective_identity.thread_id,
         rewritten.body,
         rewritten.headers,
         lease.map(|lease| lease.dispatch.clone()),
+        recorder,
     );
     if let Some(path) = &capture_path {
         req.capture_upstream(path);

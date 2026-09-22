@@ -227,8 +227,16 @@ impl AppServerIdentityClient {
         body: Value,
         headers: HashMap<String, String>,
         dispatch: Option<crate::scheduler::Dispatch>,
+        recorder: Option<crate::continuation_index::Recorder>,
     ) -> Result<crate::raw_response_stream::RawResponseStream> {
-        crate::raw_response_stream::start(&self.socket, thread_id, body, headers, dispatch)
+        crate::raw_response_stream::start(
+            &self.socket,
+            thread_id,
+            body,
+            headers,
+            dispatch,
+            recorder,
+        )
     }
 }
 

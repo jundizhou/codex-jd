@@ -72,6 +72,7 @@ pub(crate) fn start(
     body: Value,
     headers: HashMap<String, String>,
     dispatch: Option<crate::scheduler::Dispatch>,
+    recorder: Option<crate::continuation_index::Recorder>,
 ) -> Result<RawResponseStream> {
     let socket = socket.to_path_buf();
     let thread_id = thread_id.to_string();
@@ -93,6 +94,7 @@ pub(crate) fn start(
                         }),
                         &sender,
                         dispatch.as_ref(),
+                        recorder.as_ref(),
                     )
                     .await
                 })
@@ -134,6 +136,7 @@ async fn relay<S>(
     params: Value,
     sender: &mpsc::SyncSender<Result<Event, Failure>>,
     dispatch: Option<&crate::scheduler::Dispatch>,
+    recorder: Option<&crate::continuation_index::Recorder>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -202,13 +205,21 @@ where
                                 value.contains("text/event-stream")
                             });
                         observer = crate::queue_signals::Observer::new(is_stream);
+                        if (200..300).contains(&status) {
+                            observer.recorder = recorder.cloned();
+                        }
                         if let Some(dispatch) = dispatch
                             && status >= 400
                         {
                             dispatch.feedback(status, headers);
                         }
                     }
-                    Event::Chunk { data } => observer.bytes(data),
+                    Event::Chunk { data } => {
+                        observer.bytes(data);
+                        if let Some(recorder) = recorder {
+                            recorder.flush()?;
+                        }
+                    }
                     Event::Completed => {}
                 }
                 emit(sender, event, dispatch).await?;

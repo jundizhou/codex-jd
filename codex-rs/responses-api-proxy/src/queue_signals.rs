@@ -126,6 +126,7 @@ fn bounded_string(value: &Value) -> Option<String> {
 }
 
 pub(super) struct Observer {
+    pub(crate) recorder: Option<crate::continuation_index::Recorder>,
     streaming: bool,
     line: Vec<u8>,
     data: Vec<u8>,
@@ -139,6 +140,7 @@ const MAX_EVENT: usize = 256 * 1024;
 impl Observer {
     pub(super) fn new(streaming: bool) -> Self {
         Self {
+            recorder: None,
             streaming,
             line: Vec::new(),
             data: Vec::new(),
@@ -152,8 +154,13 @@ impl Observer {
     }
 
     pub(super) fn bytes(&mut self, bytes: &[u8]) {
+        let max_event = if self.recorder.is_some() {
+            4 * 1024 * 1024
+        } else {
+            MAX_EVENT
+        };
         if !self.streaming {
-            if self.data.len() + bytes.len() <= MAX_EVENT {
+            if self.data.len() + bytes.len() <= max_event {
                 self.data.extend_from_slice(bytes);
             } else {
                 self.observation.valid = false;
@@ -186,7 +193,7 @@ impl Observer {
                         )
                     });
                 } else if self.line.starts_with(b"data:") && !self.overflow {
-                    if self.data.len() + self.line.len() > MAX_EVENT {
+                    if self.data.len() + self.line.len() > max_event {
                         self.overflow = true;
                         self.observation.valid = false;
                     } else {
@@ -195,7 +202,7 @@ impl Observer {
                     }
                 }
                 self.line.clear();
-            } else if self.line.len() < MAX_EVENT {
+            } else if self.line.len() < max_event {
                 self.line.push(*byte);
             } else {
                 self.overflow = true;
@@ -213,6 +220,9 @@ impl Observer {
             }
             return;
         };
+        if let Some(recorder) = &self.recorder {
+            recorder.observe(&event);
+        }
         let kind = event["type"].as_str().unwrap_or_default();
         let response = if self.streaming {
             &event["response"]

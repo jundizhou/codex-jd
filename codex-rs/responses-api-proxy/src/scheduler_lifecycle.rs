@@ -24,7 +24,7 @@ impl Attempt {
 
 pub(crate) struct Lease {
     pub(super) scheduler: Arc<Scheduler>,
-    pub(super) key: Key,
+    pub(crate) key: Key,
     pub dispatch: Dispatch,
     pub(super) evidence: Evidence,
 }

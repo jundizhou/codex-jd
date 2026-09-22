@@ -103,6 +103,7 @@ struct Snapshot {
 }
 
 pub(crate) struct Conversations {
+    pub(crate) continuations: std::sync::Arc<std::sync::Mutex<crate::continuation_index::Index>>,
     path: PathBuf,
     _lock: File,
     account: Option<String>,
@@ -114,7 +115,7 @@ pub(crate) struct Conversations {
     idle_ttl: Duration,
 }
 
-fn account(path: &Path) -> Result<String> {
+pub(crate) fn account(path: &Path) -> Result<String> {
     let mut data = Vec::new();
     File::open(path)?
         .take(1024 * 1024 + 1)
@@ -193,7 +194,11 @@ impl Conversations {
                 record.invalid = true;
             }
         }
+        let mut continuations =
+            crate::continuation_index::Index::open(path.with_extension("continuations.json"))?;
+        continuations.retain_bindings(&records.keys().cloned().collect())?;
         let conversations = Self {
+            continuations: std::sync::Arc::new(std::sync::Mutex::new(continuations)),
             path,
             _lock: lock,
             account: match account(&auth_path) {
@@ -296,6 +301,10 @@ impl Conversations {
                 return Err(error);
             }
             self.records.remove(&obsolete);
+            self.continuations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain_bindings(&self.records.keys().cloned().collect())?;
             self.save()?;
         }
         if !self.records.contains_key(&key) && self.records.len() >= MAX_RECORDS {
