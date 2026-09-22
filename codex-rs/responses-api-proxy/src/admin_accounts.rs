@@ -346,6 +346,23 @@ pub(crate) fn control(
         let _ = req.respond(response);
         return None;
     }
+    if req.method() == &Method::Get
+        && let Some(name) = req.url().strip_prefix("/admin/api/usage?profile=")
+    {
+        let name = name.to_owned();
+        let credentials = store
+            .profile(&name)
+            .and_then(|path| read_auth(&path))
+            .map(|saved| {
+                // The active file may contain fresher tokens than its stored profile.
+                match read_auth(auth) {
+                    Ok(active) if identity(&active) == identity(&saved) => active,
+                    _ => saved,
+                }
+            });
+        crate::admin_usage::respond(req, name, credentials);
+        return None;
+    }
     let result = (|| -> anyhow::Result<Value> {
         if req.method() == &Method::Get
             && let Some(id) = req.url().strip_prefix("/admin/api/request?id=")

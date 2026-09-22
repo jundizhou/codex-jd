@@ -198,6 +198,22 @@ Authenticated controls:
   session and requires a fresh link because the code has been consumed.
 - `GET /admin/api/login-status`: the pending login's profile and authorize
   URL, so the page can restore an in-progress flow after a refresh.
+- `GET /admin/api/usage?profile=<name>`: queries a saved ChatGPT account's remaining
+  quota without activating it or issuing inference. Active profiles use the latest
+  active auth file; inactive profiles use their saved credentials. The console's
+  “查询额度” button shows window durations, remaining percentages, reset times,
+  extra credit balances and reset-credit counts when supplied by the upstream.
+  Missing windows or percentages remain unknown. API-key accounts are unsupported;
+  expired saved credentials require reauthorization. Successes are cached for 30
+  seconds per credential fingerprint (up to 64 entries); duplicate in-flight
+  queries and more than four concurrent queries receive 429. Upstream I/O has a
+  15-second timeout and a 1 MiB response cap, and runs outside the HTTP accept loop.
+  Upstream authentication errors are reported as query errors, not management-token
+  failures. Credentials and upstream account/email identifiers are not returned.
+  This follows Sub2API's
+  [OpenAIQuotaService.QueryUsage](https://github.com/Wei-Shaw/sub2api/blob/7c700729c23187d31ed320f6b19c790e2f194826/backend/internal/service/openai_quota_service.go),
+  using read-only `/backend-api/wham/usage`. It does not consume reset credits,
+  auto-reset quota, or perform Sub2API's optional inference-based usage probe.
 - `POST /admin/api/switch` with `{"profile": name}`: makes a stored profile the
   active account. The current login is saved back to its profile (or auto-backed
   up on its first switch) so refreshed tokens are not lost. Switching is refused

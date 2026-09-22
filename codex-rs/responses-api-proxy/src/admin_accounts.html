@@ -18,6 +18,7 @@
 
 dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:1px solid var(--line);border-radius:16px;color:var(--ink);background:var(--paper);overflow:auto}dialog::backdrop{background:rgba(20,35,28,.45)}.detail-top{display:flex;justify-content:space-between;align-items:center;gap:20px}.detail-message{background:var(--bg,#f5f6f3);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0}.detail-message strong{color:var(--green)}.detail-text,.request-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7}.request-detail pre{max-height:360px;overflow:auto}.request-detail summary{cursor:pointer;padding:12px 0}
 #message{position:fixed;right:24px;bottom:24px;z-index:1000;width:min(540px,calc(100vw - 48px));margin:0;box-shadow:0 8px 30px #163c2826}#confirmDialog{width:min(460px,calc(100vw - 32px));border:1px solid var(--line);border-radius:14px;padding:24px}#confirmDialog::backdrop{background:#14251d66}#confirmText{margin:16px 0;white-space:pre-wrap}.confirm-actions{display:flex;justify-content:flex-end;gap:10px}
+.quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px}.quota-window{border:1px solid var(--line);border-radius:10px;padding:18px}.quota-window h3{margin:0;font-size:14px}.quota-value{font-size:28px;font-weight:650;color:var(--green);margin:12px 0 7px}.quota-window progress{appearance:none;-webkit-appearance:none;border:0;border-radius:6px;width:100%;height:10px;accent-color:var(--green)}.quota-window progress::-webkit-progress-bar{background:#edf1eb;border-radius:6px}.quota-window progress::-webkit-progress-value{background:var(--green);border-radius:6px}.quota-window.low progress{accent-color:var(--orange)}.quota-window.low progress::-webkit-progress-value{background:var(--orange)}.quota-window.low .quota-value{color:#a56427}.quota-window.unknown .quota-value{color:var(--muted)}.quota-heading{display:flex;align-items:center;gap:12px;margin:22px 0 8px}.quota-heading h3{margin:0;font-size:16px}#usageState.error{color:var(--danger)}#usageRefresh{margin-top:18px}@media(max-width:600px){.quota-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -91,6 +92,13 @@ dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:
   <details><summary>原始请求 JSON</summary><pre id="detailRaw"></pre></details>
 </dialog>
 <dialog id="confirmDialog" aria-labelledby="confirmTitle"><h2 id="confirmTitle">确认操作</h2><p id="confirmText"></p><div class="confirm-actions"><button id="confirmCancel" type="button">取消</button><button id="confirmAccept" class="primary" type="button">确认</button></div></dialog>
+<dialog id="accountUsage" class="request-detail" aria-labelledby="usageTitle">
+  <div class="detail-top"><h2 id="usageTitle">账号剩余额度</h2><form method="dialog"><button aria-label="关闭额度详情">关闭 ✕</button></form></div>
+  <p id="usageState" class="hint" role="status" aria-live="polite"></p>
+  <div id="usageContent"></div>
+  <button id="usageRefresh" type="button">刷新额度</button>
+  <p class="hint">支持查询当前和备用账号。结果最多缓存 30 秒；剩余比例和重置时间以上游返回为准。</p>
+</dialog>
 <script>
 let token = sessionStorage.getItem('codex_worker_token') || '',
   busy = false;
@@ -140,6 +148,9 @@ async function api(path, body) {
   } finally { clearTimeout(timeout); }
 }
 function logout() {
+  ++usageGeneration;
+  if (el('accountUsage').open) el('accountUsage').close();
+  el('usageContent').replaceChildren();
   token = '';
   sessionStorage.removeItem('codex_worker_token');
   el('console').hidden = true;
@@ -203,6 +214,7 @@ async function load() {
     }
     const cell = document.createElement('td');
     for (const [label, action] of [
+      ['查询额度', 'usage'],
       ['设为当前账号', 'switch'],
       ['重新授权', 'reauthorize'],
       ['删除', 'delete'],
@@ -210,11 +222,12 @@ async function load() {
       const button = document.createElement('button');
       button.textContent = p.active && action === 'switch' ? '使用中' : label;
       button.className = action === 'delete' ? 'danger' : '';
-      const locked = action === 'switch' && (p.active || !p.valid);
+      const locked = (action === 'switch' && (p.active || !p.valid)) || (action === 'usage' && !p.valid);
       button.dataset.locked = String(locked);
       button.disabled = locked || busy;
       if (p.active && action === 'delete') button.title = '当前账号需先切换后才能删除';
       button.onclick = async () => {
+        if (action === 'usage') { showUsage(p.name); return; }
         if (action === 'reauthorize') {
           el('linkName').value = p.name;
           el('linkForm').requestSubmit();
@@ -286,6 +299,64 @@ async function load() {
     row.append(cell);
     el('profiles').append(row);
   }
+}
+let usageGeneration = 0;
+async function showUsage(profile) {
+  const generation = ++usageGeneration, dialog = el('accountUsage');
+  el('usageTitle').textContent = `账号剩余额度 · ${profile}`;
+  el('usageState').textContent = '正在查询…';
+  el('usageState').className = 'hint';
+  el('usageContent').replaceChildren();
+  el('usageRefresh').disabled = true;
+  el('usageRefresh').onclick = () => showUsage(profile);
+  if (!dialog.open) dialog.showModal();
+  try {
+    const data = await api('usage?profile=' + encodeURIComponent(profile));
+    if (generation !== usageGeneration) return;
+    const plans = {plus:'Plus',pro:'Pro',free:'Free',team:'Team',business:'Business',enterprise:'Enterprise',self_serve_business_prolite:'Business Pro Lite'};
+    el('usageState').textContent = (plans[data.plan_type] || data.plan_type || '套餐未提供') +
+      ' · 更新于 ' + new Date(data.fetched_at * 1000).toLocaleString('zh-CN') + (data.cached ? ' · 缓存结果' : '');
+    const add = (parent, tag, value, className) => {
+      const node = document.createElement(tag); node.textContent = value;
+      if (className) node.className = className;
+      parent.append(node); return node;
+    };
+    const content = el('usageContent');
+    if (data.spend_control_reached) add(content, 'p', '已触及账号消费限制', 'badge warning');
+    for (const group of data.limits) {
+      const heading = add(content, 'div', '', 'quota-heading');
+      add(heading, 'h3', group.name);
+      if (group.limit_reached || group.allowed === false) add(heading, 'span', '额度暂不可用', 'badge warning');
+      const grid = add(content, 'div', '', 'quota-grid');
+      for (const window of group.windows) {
+        const seconds = window.seconds;
+        const label = seconds > 0 ? (seconds % 86400 === 0 ? seconds / 86400 + ' 天额度' :
+          seconds % 3600 === 0 ? seconds / 3600 + ' 小时额度' : Math.round(seconds / 60) + ' 分钟额度') : '额度窗口';
+        const known = typeof window.remaining_percent === 'number', remaining = window.remaining_percent;
+        const card = add(grid, 'section', '', 'quota-window' + (!known ? ' unknown' : remaining < 20 ? ' low' : ''));
+        add(card, 'h3', label);
+        add(card, 'div', known ? '剩余 ' + Number(remaining.toFixed(1)) + '%' : '未提供比例', 'quota-value');
+        if (known) {
+          const bar = document.createElement('progress'); bar.max = 100; bar.value = remaining;
+          bar.setAttribute('aria-label', label + '剩余比例'); card.append(bar);
+        }
+        add(card, 'p', window.reset_at ? '重置于 ' + new Date(window.reset_at * 1000).toLocaleString('zh-CN') : '未提供重置时间', 'hint');
+      }
+      if (!group.windows.length) add(grid, 'p', '上游未提供此项的额度窗口', 'hint');
+    }
+    if (!data.limits.length) add(content, 'p', '上游未提供可用的额度窗口', 'hint');
+    if (data.credits) {
+      const credit = data.credits;
+      add(content, 'p', '额外额度：' + (credit.unlimited ? '无限' : credit.has_credits === false ? '未启用' :
+        credit.balance !== null ? '余额 ' + credit.balance : '未提供余额'), 'hint');
+    }
+    if (typeof data.reset_credits === 'number') add(content, 'p', '可用额度重置次数：' + data.reset_credits, 'hint');
+  } catch (error) {
+    if (generation === usageGeneration) {
+      el('usageState').textContent = '查询失败：' + error.message;
+      el('usageState').className = 'hint error';
+    }
+  } finally { if (generation === usageGeneration) el('usageRefresh').disabled = false; }
 }
 async function showRequest(id) {
   const dialog = el('requestDetail');
