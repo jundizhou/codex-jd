@@ -60,7 +60,8 @@ Lite 验收请求使用 `reasoning.context=all_turns`、`parallel_tool_calls=fal
 | `Authorization` | 客户端值仅用于 Worker 入口鉴权；移除后由 Codex 上游认证配置提供真实凭证。 |
 | `Proxy-Authorization` / `api-key` / `x-api-key` | 不转发客户端凭证；上游认证配置按需提供。 |
 | `ChatGPT-Account-Id` / `OpenAI-Organization` / `OpenAI-Project` | 不让客户端值覆盖服务器选定账号或上游提供方配置。 |
-| `User-Agent` / `originator` | 使用服务器实际 Codex 版本和来源；默认值可能由 HTTP 客户端在快照边界之后添加。 |
+| `originator` | raw Responses 出站固定写入 `Codex Desktop`，覆盖客户端、线程来源及提供方默认值。 |
+| `User-Agent` | raw Responses 出站固定写入 `Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)`，不随宿主系统或客户端来值变化。 |
 | `session-id` / `thread-id` / `x-client-request-id` | 去掉客户端值，由 Codex transport 写入服务端会话/线程身份。下划线形式的身份字段按第二节替换。 |
 | `x-oai-attestation` | 移除原客户端签名；它与原客户端身份绑定，不能在改写身份后原样沿用。当前 raw 链路不生成新的 attestation，不伪造签名。 |
 | `Cookie` / `Cookie2` / `Set-Cookie` | 不转发客户端 cookie 或以请求头夹带的 Set-Cookie；服务端自身 cookie store 仍由真实 transport 管理。 |
@@ -88,4 +89,5 @@ Lite 验收请求使用 `reasoning.context=all_turns`、`parallel_tool_calls=fal
 - 线上实际发送边界：对照同一请求的客户端与上游记录，逐个比较应保留字段；不能仅凭 HTTP 200 判定头完整。
 - metadata 回归：header-only、body-only、两处同时存在、工具续接、父子关联以及持久绑定。
 
-管理页捕获的是应用 HTTP 发送边界，不是完整网络抓包。Host、Content-Length、User-Agent 等可能在此边界之后由 HTTP 客户端添加，不能仅因快照缺失就判定未发送。
+管理页捕获的是应用 HTTP 发送边界，不是完整网络抓包。Host、Content-Length 等可能在此边界之后由 HTTP 客户端添加，不能仅因快照缺失就判定未发送。
+固定的 User-Agent 和 originator 在 raw HTTP 发送前显式写入，因此管理页的上游快照也应包含这两个最终值。这是该代理约定的客户端标识，不代表实际 Linux 宿主的操作系统或二进制版本。

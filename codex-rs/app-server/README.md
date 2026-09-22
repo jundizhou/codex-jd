@@ -619,8 +619,11 @@ Duplicate, oversized and invalid text values are omitted; other headers,
 including credentials and cookies, are never forwarded. Retry-After is preserved
 verbatim for the caller to interpret. Tokens are not shared or cached across requests. Normal
 turn responses set these raw response fields to `null`. The server's Codex
-transport owns authorization and User-Agent; these cannot be overridden through
-`rawResponsesHeaders`. Waiting for the upstream response and waiting between body
+transport owns authorization. Raw Responses override originator with `Codex Desktop`
+and User-Agent with `Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)`.
+These fixed values cannot be overridden through `rawResponsesHeaders` or thread
+originator settings, and appear in the application HTTP capture. Waiting for the
+upstream response and waiting between body
 chunks both use the thread provider's `stream_idle_timeout_ms` (default 300000 ms).
 The raw adapter does not retry timed-out requests.
 

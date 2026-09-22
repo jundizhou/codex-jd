@@ -303,10 +303,12 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
             identity.thread_id.as_str()
         ]
     );
-    assert!(
-        request.headers["user-agent"]
-            .to_str()?
-            .contains(env!("CARGO_PKG_VERSION"))
+    assert_eq!(
+        ["originator", "user-agent"].map(|name| request.headers[name].to_str().unwrap()),
+        [
+            "Codex Desktop",
+            "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)"
+        ]
     );
 
     Ok(())

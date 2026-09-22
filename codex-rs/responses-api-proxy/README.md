@@ -308,7 +308,10 @@ headers are bounded to 128 entries, 256 bytes per name, 8192 bytes per value and
 Caller credentials, account selection, cookies, User-Agent, originator,
 session-id/thread-id/x-client-request-id, proxy provenance and internal
 `x-codex-queue-*` headers are excluded. Codex's upstream transport supplies its
-own credentials and identities. Caller `x-oai-attestation` is discarded because
+own credentials and session identities. Raw Responses explicitly set originator
+to `Codex Desktop` and User-Agent to `Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)`
+after caller/thread headers have been assembled. Both final values are visible
+in the application capture, regardless of the host OS. Caller `x-oai-attestation` is discarded because
 its signature is bound to the original client; the raw adapter does not generate
 a replacement. HTTP framing, compression negotiation and hop-by-hop headers,
 including names nominated by Connection, belong to the outgoing transport.

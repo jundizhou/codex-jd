@@ -178,6 +178,13 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 HeaderValue::from_static("text/event-stream"),
             );
         }
+        // The raw adapter uses a fixed Desktop identity, independent of caller,
+        // provider defaults and the operating system hosting the proxy.
+        extra_headers.insert("originator", HeaderValue::from_static("Codex Desktop"));
+        extra_headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)"),
+        );
         let mut attempt = 0;
         let response = loop {
             let response = self

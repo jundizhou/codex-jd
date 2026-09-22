@@ -26,6 +26,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -642,6 +643,61 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_responses_override_caller_and_provider_identity_without_changing_payload() -> Result<()>
+{
+    let state = RecordingState::default();
+    let mut settings = provider("openai");
+    settings
+        .headers
+        .insert("originator", HeaderValue::from_static("provider-origin"));
+    settings
+        .headers
+        .insert("user-agent", HeaderValue::from_static("provider-agent"));
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        settings,
+        Arc::new(NoAuth),
+    );
+    let body = serde_json::json!({"model":"test","input":[],"unknown":"preserved"});
+    let caller = HeaderMap::from_iter([
+        (
+            HeaderName::from_static("originator"),
+            HeaderValue::from_static("caller-origin"),
+        ),
+        (
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("caller-agent"),
+        ),
+    ]);
+    for mut headers in [HeaderMap::new(), caller] {
+        headers.insert("x-custom", HeaderValue::from_static("preserved"));
+        client
+            .stream_raw(body.clone(), headers, Compression::None)
+            .await?;
+    }
+    let expected = [
+        ("originator", "Codex Desktop"),
+        ("user-agent", "Codex Desktop/0.155.0-alpha.9.2 (Mac OS 13.5.0; arm64) unknown (Codex Desktop; 26.915.31945)"),
+        ("x-custom", "preserved"), ("accept", "text/event-stream"), ("content-type", "application/json"),
+    ].into_iter().map(|(name, value)| (HeaderName::from_static(name), HeaderValue::from_static(value))).collect::<HeaderMap>();
+    let actual = state
+        .take_stream_requests()
+        .iter()
+        .map(|request| {
+            Ok((
+                request.headers.clone(),
+                serde_json::from_slice::<serde_json::Value>(request_body_bytes(request))?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        actual,
+        vec![(expected.clone(), body.clone()), (expected, body)]
+    );
     Ok(())
 }
 
