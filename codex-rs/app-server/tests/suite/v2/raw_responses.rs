@@ -243,8 +243,6 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     for key in ["x-codex-window-id", "window_id", "context_window_id"] {
         metadata.insert(key.to_string(), json!(identity.window_id));
     }
-    metadata.remove("root_turn_id");
-    metadata.remove("parent_turn_id");
     let mut nested: serde_json::Value =
         serde_json::from_str(metadata["x-codex-turn-metadata"].as_str().unwrap())?;
     nested["installation_id"] = json!(identity.installation_id);
@@ -252,8 +250,6 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     nested["thread_id"] = json!(identity.thread_id);
     nested["window_id"] = json!(identity.window_id);
     nested["context_window_id"] = json!(identity.window_id);
-    nested.as_object_mut().unwrap().remove("root_turn_id");
-    nested.as_object_mut().unwrap().remove("parent_turn_id");
     metadata.insert(
         "x-codex-turn-metadata".to_string(),
         json!(serde_json::to_string(&nested)?),
@@ -269,10 +265,6 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     for (name, value) in supplied_headers {
         assert_eq!(request.headers.get(&name).unwrap().to_str()?, value);
     }
-    assert_eq!(
-        request.headers["x-codex-window-id"].to_str()?,
-        identity.window_id
-    );
     assert!(
         request.headers["user-agent"]
             .to_str()?

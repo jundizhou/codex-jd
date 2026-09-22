@@ -56,6 +56,7 @@ pub(crate) fn header(req: &Request, name: &'static str) -> anyhow::Result<Option
 
 pub(crate) fn control(
     queue: &Scheduler,
+    identity_client: &crate::app_server_reader::AppServerIdentityClient,
     req: Request,
     _account_label: &str,
     profile_dir: Option<&Path>,
@@ -64,7 +65,14 @@ pub(crate) fn control(
 ) -> Option<Request> {
     let req = if req.url().starts_with("/admin/") {
         let root = profile_dir.unwrap_or_else(|| auth_path.parent().unwrap_or(Path::new(".")));
-        return crate::admin_accounts::control(queue, req, root, auth_path, capacity);
+        return crate::admin_accounts::control(
+            queue,
+            identity_client,
+            req,
+            root,
+            auth_path,
+            capacity,
+        );
     } else {
         req
     };

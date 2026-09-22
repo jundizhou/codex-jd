@@ -1,4 +1,5 @@
 //! Authenticated account storage and browser administration. Credentials never leave the server.
+use crate::app_server_reader::AppServerIdentityClient;
 use crate::monitored_request::Request;
 use crate::scheduler::Scheduler;
 use anyhow::Context;
@@ -327,6 +328,7 @@ fn write_private(path: &Path, value: &Value) -> anyhow::Result<()> {
 
 pub(crate) fn control(
     queue: &Scheduler,
+    identity_client: &AppServerIdentityClient,
     mut req: Request,
     root: &Path,
     auth: &Path,
@@ -374,17 +376,22 @@ pub(crate) fn control(
         match req.url() {
             "/admin/api/add" => {
                 return store.save_login(name, &body["auth"], |value| {
-                    queue.switch_idle(|| write_private(auth, value))
+                    queue.switch_idle(|| write_private(auth, value))?;
+                    identity_client.reload()
                 });
             }
             "/admin/api/delete" => store.delete(name)?,
-            "/admin/api/switch" => queue.switch_idle(|| store.activate(name))?,
+            "/admin/api/switch" => {
+                queue.switch_idle(|| store.activate(name))?;
+                identity_client.reload()?;
+            }
             "/admin/api/login-start" => return crate::admin_login::start(root, name),
             "/admin/api/login-callback" => {
                 let url = body["url"].as_str().context("缺少回调链接")?;
                 return crate::admin_login::complete(root, name, url, |value| {
                     store.save_login(name, value, |value| {
-                        queue.switch_idle(|| write_private(auth, value))
+                        queue.switch_idle(|| write_private(auth, value))?;
+                        identity_client.reload()
                     })
                 });
             }

@@ -13,7 +13,7 @@ use super::invalid_request;
 pub(super) fn request_headers(
     supplied: HashMap<String, String>,
 ) -> Result<HeaderMap, JSONRPCErrorError> {
-    if supplied.len() > 4 {
+    if supplied.len() > 12 {
         return Err(invalid_request("too many raw Responses headers"));
     }
     let mut headers = HeaderMap::new();
@@ -21,7 +21,14 @@ pub(super) fn request_headers(
         let name = name.to_ascii_lowercase();
         if !matches!(
             name.as_str(),
-            "x-codex-turn-state" | "x-codex-inference-call-id" | "traceparent" | "tracestate"
+            "x-codex-turn-state"
+                | "x-codex-inference-call-id"
+                | "traceparent"
+                | "tracestate"
+                | "x-codex-turn-metadata"
+                | "x-codex-installation-id"
+                | "x-codex-window-id"
+                | "x-codex-parent-thread-id"
         ) || value.len() > 8192
             || headers.contains_key(&name)
         {

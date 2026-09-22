@@ -1,7 +1,5 @@
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
-use axum::http::HeaderMap;
-use axum::http::HeaderValue;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
@@ -16,7 +14,6 @@ use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
 use futures::StreamExt;
-use serde_json::Map;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -77,15 +74,6 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
     Ok(())
 }
 
-fn insert_raw_header(headers: &mut HeaderMap, name: &str, value: &str) {
-    if let (Ok(name), Ok(value)) = (
-        name.parse::<axum::http::HeaderName>(),
-        HeaderValue::from_str(value),
-    ) {
-        headers.insert(name, value);
-    }
-}
-
 fn rewrite_raw_responses_identity(
     mut request: Value,
     identity: &codex_core::ModelRequestIdentity,
@@ -95,37 +83,32 @@ fn rewrite_raw_responses_identity(
             "raw Responses request must be a JSON object",
         ));
     };
-    let metadata = object
-        .entry("client_metadata")
-        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(metadata) = object.get_mut("client_metadata") else {
+        return Ok(request);
+    };
     let Some(metadata) = metadata.as_object_mut() else {
         return Err(invalid_request(
             "raw Responses client_metadata must be an object",
         ));
     };
-    metadata.insert(
-        "x-codex-installation-id".to_string(),
-        Value::String(identity.installation_id.clone()),
-    );
-    metadata.insert(
-        "session_id".to_string(),
-        Value::String(identity.session_id.clone()),
-    );
-    metadata.insert(
-        "thread_id".to_string(),
-        Value::String(identity.thread_id.clone()),
-    );
-    for key in ["x-codex-window-id", "window_id", "context_window_id"] {
-        if metadata.contains_key(key) {
-            metadata.insert(key.to_string(), Value::String(identity.window_id.clone()));
+    let keys = metadata.keys().cloned().collect::<Vec<_>>();
+    for key in keys {
+        let value = match key.as_str() {
+            "x-codex-installation-id" => Some(identity.installation_id.as_str()),
+            "session_id" => Some(identity.session_id.as_str()),
+            "thread_id" => Some(identity.thread_id.as_str()),
+            "x-codex-window-id" | "window_id" | "context_window_id" => {
+                Some(identity.window_id.as_str())
+            }
+            "root_turn_id" => identity.root_turn_id.as_deref(),
+            "parent_turn_id" => identity.parent_turn_id.as_deref(),
+            "turn_id" => identity.turn_id.as_deref(),
+            _ => None,
+        };
+        if let Some(value) = value {
+            metadata.insert(key, Value::String(value.to_string()));
         }
     }
-    replace_optional_raw_metadata(metadata, "root_turn_id", identity.root_turn_id.as_deref());
-    replace_optional_raw_metadata(
-        metadata,
-        "parent_turn_id",
-        identity.parent_turn_id.as_deref(),
-    );
     if let Some(raw_nested) = metadata.get("x-codex-turn-metadata") {
         let raw_nested = raw_nested.as_str().ok_or_else(|| {
             invalid_request("raw Responses x-codex-turn-metadata must be a JSON string")
@@ -141,33 +124,22 @@ fn rewrite_raw_responses_identity(
             ));
         };
         let mut nested = nested;
-        nested.insert(
-            "installation_id".to_string(),
-            Value::String(identity.installation_id.clone()),
-        );
-        nested.insert(
-            "session_id".to_string(),
-            Value::String(identity.session_id.clone()),
-        );
-        nested.insert(
-            "thread_id".to_string(),
-            Value::String(identity.thread_id.clone()),
-        );
-        for key in ["window_id", "context_window_id"] {
-            if nested.contains_key(key) {
-                nested.insert(key.to_string(), Value::String(identity.window_id.clone()));
+        let keys = nested.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let value = match key.as_str() {
+                "installation_id" => Some(identity.installation_id.as_str()),
+                "session_id" => Some(identity.session_id.as_str()),
+                "thread_id" => Some(identity.thread_id.as_str()),
+                "window_id" | "context_window_id" => Some(identity.window_id.as_str()),
+                "root_turn_id" => identity.root_turn_id.as_deref(),
+                "parent_turn_id" => identity.parent_turn_id.as_deref(),
+                "turn_id" => identity.turn_id.as_deref(),
+                _ => None,
+            };
+            if let Some(value) = value {
+                nested.insert(key, Value::String(value.to_string()));
             }
         }
-        replace_optional_raw_metadata(
-            &mut nested,
-            "root_turn_id",
-            identity.root_turn_id.as_deref(),
-        );
-        replace_optional_raw_metadata(
-            &mut nested,
-            "parent_turn_id",
-            identity.parent_turn_id.as_deref(),
-        );
         metadata.insert(
             "x-codex-turn-metadata".to_string(),
             Value::String(serde_json::to_string(&nested).unwrap_or_default()),
@@ -179,21 +151,6 @@ fn rewrite_raw_responses_identity(
 #[cfg(test)]
 #[path = "turn_processor_tests.rs"]
 mod tests;
-
-fn replace_optional_raw_metadata(
-    metadata: &mut serde_json::Map<String, Value>,
-    key: &str,
-    value: Option<&str>,
-) {
-    match value {
-        Some(value) => {
-            metadata.insert(key.to_string(), Value::String(value.to_string()));
-        }
-        None => {
-            metadata.remove(key);
-        }
-    }
-}
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
@@ -329,15 +286,9 @@ impl TurnRequestProcessor {
             .to_string();
         let identity = thread.model_request_identity().await;
         let raw_request = rewrite_raw_responses_identity(raw_request, &identity)?;
-        let mut headers = super::raw_responses_headers::request_headers(
+        let headers = super::raw_responses_headers::request_headers(
             params.raw_responses_headers.unwrap_or_default(),
         )?;
-        insert_raw_header(
-            &mut headers,
-            "x-codex-installation-id",
-            &identity.installation_id,
-        );
-        insert_raw_header(&mut headers, "x-codex-window-id", &identity.window_id);
         let idle_timeout = thread.config().await.model_provider.stream_idle_timeout();
         let upstream = tokio::time::timeout(
             idle_timeout,

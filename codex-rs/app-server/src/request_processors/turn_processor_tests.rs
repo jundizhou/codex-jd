@@ -55,6 +55,7 @@ fn rewrites_identity_fields_and_preserves_other_request_fields() {
     metadata["x-codex-window-id"] = "window-local".into();
     metadata["root_turn_id"] = "root-local".into();
     metadata["parent_turn_id"] = "parent-turn-local".into();
+    metadata["turn_id"] = "turn-local".into();
     let mut nested: serde_json::Value =
         serde_json::from_str(metadata["x-codex-turn-metadata"].as_str().unwrap())
             .expect("parse nested metadata");
@@ -64,6 +65,7 @@ fn rewrites_identity_fields_and_preserves_other_request_fields() {
     nested["window_id"] = "window-local".into();
     nested["root_turn_id"] = "root-local".into();
     nested["parent_turn_id"] = "parent-turn-local".into();
+    nested["turn_id"] = "turn-local".into();
     metadata["x-codex-turn-metadata"] = serde_json::to_string(&nested).unwrap().into();
     assert_eq!(rewritten, expected);
 }

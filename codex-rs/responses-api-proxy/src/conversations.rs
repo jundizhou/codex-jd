@@ -132,6 +132,12 @@ fn account(path: &Path) -> Result<String> {
 }
 
 impl Conversations {
+    pub(crate) fn reset_account(&mut self) -> Result<()> {
+        self.account = Some(account(&self.auth_path)?);
+        self.loaded.clear();
+        self.save()
+    }
+
     pub(crate) fn open(
         path: PathBuf,
         auth_path: PathBuf,

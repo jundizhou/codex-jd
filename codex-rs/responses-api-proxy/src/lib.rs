@@ -52,6 +52,7 @@ use app_server_reader::resolve_socket_arg;
 use dump::ExchangeDumper;
 use identity::SessionIdentity;
 use rewrite::rewrite_body;
+use rewrite::rewrite_header;
 use session_pool::SessionPool;
 
 #[derive(Serialize)]
@@ -232,6 +233,7 @@ pub fn run_main(args: Args) -> Result<()> {
             if request.method() == &Method::Get && request.url() == "/admin/accounts" {
                 let _ = queue_http::control(
                     queue,
+                    &forward_config.identity_client,
                     request,
                     &forward_config.account_label,
                     forward_config.profile_dir.as_deref(),
@@ -250,6 +252,7 @@ pub fn run_main(args: Args) -> Result<()> {
             }
             let Some(request) = queue_http::control(
                 queue,
+                &forward_config.identity_client,
                 request,
                 &forward_config.account_label,
                 forward_config.profile_dir.as_deref(),
@@ -501,13 +504,24 @@ fn forward_request_with_identity(
         let name = header.field.as_str().to_ascii_lowercase().to_string();
         if matches!(
             name.as_str(),
-            "x-codex-turn-state" | "x-codex-inference-call-id" | "traceparent" | "tracestate"
+            "x-codex-turn-state"
+                | "x-codex-inference-call-id"
+                | "traceparent"
+                | "tracestate"
+                | "x-codex-turn-metadata"
+                | "x-codex-installation-id"
+                | "x-codex-window-id"
+                | "x-codex-parent-thread-id"
         ) && (header.value.len() > 8192
             || headers.insert(name, header.value.to_string()).is_some())
         {
             req.respond(Response::new_empty(StatusCode(400)))?;
             anyhow::bail!("oversized or duplicate routing/tracing header");
         }
+    }
+    for (name, value) in &mut headers {
+        *value = rewrite_header(name, value, &effective_identity)
+            .map_err(|error| anyhow::anyhow!("rewriting request header {name}: {error}"))?;
     }
     let capture_path = std::env::var_os("CODEX_HTTP_CAPTURE_DIR")
         .filter(|_| {

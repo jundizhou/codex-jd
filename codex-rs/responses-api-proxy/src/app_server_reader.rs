@@ -77,6 +77,9 @@ pub(crate) enum IdentityMode {
 }
 
 enum Command {
+    Reload {
+        response: mpsc::Sender<Result<()>>,
+    },
     RecoverConversation {
         key: String,
         response: mpsc::Sender<Result<()>>,
@@ -202,6 +205,17 @@ impl AppServerIdentityClient {
             .recv()
             .context("app-server identity worker stopped before replying")?
             .map_err(anyhow::Error::msg)
+    }
+
+    /// Reconnects the control channel after the active auth profile changes.
+    pub(crate) fn reload(&self) -> Result<()> {
+        let (response, receiver) = mpsc::channel();
+        self.command_tx
+            .send(Command::Reload { response })
+            .context("identity worker stopped")?;
+        receiver
+            .recv()
+            .context("identity worker stopped during reload")?
     }
 
     pub(crate) fn run_raw_response(
@@ -531,6 +545,24 @@ fn run_worker(
                 }
             };
             match command {
+                Command::Reload { response } => {
+                    let result = async {
+                        let mut replacement = connect(&socket).await?;
+                        initialize(&mut replacement).await?;
+                        match &mut mode {
+                            IdentityMode::Pool(size) => {
+                                create_pool_threads(&mut replacement, *size).await?;
+                            }
+                            IdentityMode::Durable(conversations) => {
+                                conversations.reset_account()?;
+                            }
+                        }
+                        stream = replacement;
+                        Ok(())
+                    }
+                    .await;
+                    let _ = response.send(result);
+                }
                 Command::RecoverConversation { key, response } => {
                     let result = match &mut mode {
                         IdentityMode::Durable(conversations) => conversations.recover(&socket, &mut stream, &key).await,
