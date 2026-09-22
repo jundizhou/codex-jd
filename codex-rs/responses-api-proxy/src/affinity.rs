@@ -37,13 +37,35 @@ pub(crate) fn key_for_http_request(
             direct_key.get_or_insert_with(|| format!("{name}:{value}"));
         }
     }
-    let key = key_for_request(body).or(header_key).or(direct_key);
+    let body_key = key_for_request(body);
+    // SDKs can carry the stable session solely in a request header while
+    // retaining other metadata (such as a rotating thread ID) in the body.
+    // Use the same session_id namespace as native Codex metadata, and reject
+    // contradictory session identities instead of silently choosing one.
+    let key = if let Some(session_key) = direct_key
+        .as_ref()
+        .filter(|key| key.starts_with("session_id:"))
+    {
+        for candidate in [&body_key, &header_key].into_iter().flatten() {
+            anyhow::ensure!(
+                !candidate.starts_with("session_id:") || candidate == session_key,
+                "conflicting session_id values"
+            );
+        }
+        Some(session_key.clone())
+    } else {
+        body_key.or(header_key).or(direct_key)
+    };
     anyhow::ensure!(
         key.as_ref().is_none_or(|key| key.len() <= 512),
         "conversation key too long"
     );
     Ok(key)
 }
+
+#[cfg(test)]
+#[path = "affinity_header_tests.rs"]
+mod header_tests;
 
 pub(crate) fn key_for_request(body: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(body).ok()?;

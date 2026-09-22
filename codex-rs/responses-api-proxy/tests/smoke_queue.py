@@ -23,6 +23,7 @@ async def main():
     identities, calls, active = [], [], set()
     loaded, persisted, rpc_calls = set(), set(), []
     request_bodies = {}
+    request_headers = {}
     gates = {}
     responses = {}
     end_times = {}
@@ -95,6 +96,7 @@ async def main():
                         } == preserved_headers
                         assert not set(private_headers) & set(forwarded)
                     request_bodies[tag] = body
+                    request_headers[tag] = params["rawResponsesHeaders"]
                     active.add(thread)
                     calls.append((tag, time.monotonic(), thread))
                     assert len(active) <= 2
@@ -411,6 +413,53 @@ async def main():
                         extra={"previous_response_id": "persisted-response"},
                     ) == (200, wire)
                     assert calls[-1][2] == prior
+                    # SDK HTTP session identity uses the native metadata binding,
+                    # independently of changing inference IDs or runtime threads.
+                    sdk_headers = {"session_id": "desktop-task"}
+                    assert await send(
+                        "sdk-session-first",
+                        "unused",
+                        extra={"client_metadata": {}},
+                        queue_headers=sdk_headers,
+                    ) == (200, wire)
+                    sdk_thread = calls[-1][2]
+                    assert (
+                        request_headers["sdk-session-first"]["session_id"] == sdk_thread
+                    )
+                    assert sdk_thread != "desktop-task"
+                    assert await send("sdk-native-next", "desktop-task") == (200, wire)
+                    assert calls[-1][2] == sdk_thread
+                    assert await send(
+                        "sdk-segment-next",
+                        "unused",
+                        extra={"client_metadata": {"thread_id": "compressed-segment"}},
+                        queue_headers=sdk_headers,
+                    ) == (200, wire)
+                    assert calls[-1][2] == sdk_thread
+                    assert request_bodies["sdk-segment-next"]["client_metadata"] == {
+                        "thread_id": sdk_thread,
+                    }
+                    for tag, tenant, session in [
+                        ("sdk-other-task", "user", "other-desktop-task"),
+                        ("sdk-other-caller", "other-user", "desktop-task"),
+                    ]:
+                        assert await send(
+                            tag,
+                            "unused",
+                            tenant,
+                            extra={"client_metadata": {}},
+                            queue_headers={"session_id": session},
+                        ) == (200, wire)
+                        assert calls[-1][2] != sdk_thread
+                    before = len(calls)
+                    assert (
+                        await send(
+                            "sdk-conflict",
+                            "different-session",
+                            queue_headers=sdk_headers,
+                        )
+                    )[0] == 400
+                    assert len(calls) == before
                     # More logical conversations than the loaded-thread limit.
                     concurrent = await asyncio.gather(
                         *(
@@ -444,6 +493,20 @@ async def main():
                     )
                     assert calls[-1][2] == prior
                     assert request_bodies["old-binding"]["input"] == follow
+                    sdk_history = [
+                        {"type": "reasoning", "encrypted_content": "sdk-cipher"}
+                    ]
+                    assert await send(
+                        "sdk-after-restart",
+                        "unused",
+                        extra={"client_metadata": {}, "input": sdk_history},
+                        queue_headers=sdk_headers,
+                    ) == (200, wire)
+                    assert calls[-1][2] == sdk_thread
+                    assert request_bodies["sdk-after-restart"]["input"] == sdk_history
+                    assert (
+                        request_headers["sdk-after-restart"]["session_id"] == sdk_thread
+                    )
                     before = len(calls)
                     for i, extra in enumerate(
                         [
