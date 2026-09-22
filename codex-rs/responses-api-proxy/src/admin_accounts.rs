@@ -373,6 +373,7 @@ pub(crate) fn control(
             body["queue"] = queue.status();
             body["capacity"] = json!(store.capacity);
             body["metrics"] = crate::request_metrics::METRICS.snapshot();
+            body["rotation"] = crate::account_rotation::status();
             return Ok(body);
         }
         if req.method() == &Method::Get && req.url() == "/admin/api/login-status" {
@@ -387,6 +388,7 @@ pub(crate) fn control(
         let body: Value = serde_json::from_slice(&bytes).context("请求必须是 JSON")?;
         let name = body["profile"].as_str().unwrap_or_default();
         match req.url() {
+            "/admin/api/rotation" => crate::account_rotation::configure(body.clone())?,
             "/admin/api/add" => {
                 return store.save_login(name, &body["auth"], |value| {
                     crate::account_switch::apply(queue, identity_client, auth, || {

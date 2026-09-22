@@ -27,6 +27,7 @@ mod affinity;
 mod app_server_reader;
 mod args;
 pub use args::Args;
+mod account_rotation;
 mod account_switch;
 mod admin_accounts;
 mod admin_login;
@@ -201,6 +202,15 @@ pub fn run_main(args: Args) -> Result<()> {
         queue.start_recovery(&identity_client)?;
     }
 
+    if let Some(queue) = &queue {
+        account_rotation::start(
+            Arc::clone(queue),
+            Arc::clone(&identity_client),
+            admin_dir.clone(),
+            auth_path.clone(),
+            session_pool_size,
+        )?;
+    }
     let metadata_profiles = std::env::var_os("CODEX_METADATA_PROFILES")
         .map(|path| metadata_profiles::Profiles::open(Path::new(&path)))
         .transpose()

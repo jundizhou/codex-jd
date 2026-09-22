@@ -19,6 +19,7 @@
 dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:1px solid var(--line);border-radius:16px;color:var(--ink);background:var(--paper);overflow:auto}dialog::backdrop{background:rgba(20,35,28,.45)}.detail-top{display:flex;justify-content:space-between;align-items:center;gap:20px}.detail-message{background:var(--bg,#f5f6f3);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0}.detail-message strong{color:var(--green)}.detail-text,.request-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7}.request-detail pre{max-height:360px;overflow:auto}.request-detail summary{cursor:pointer;padding:12px 0}
 #message{position:fixed;right:24px;bottom:24px;z-index:1000;width:min(540px,calc(100vw - 48px));margin:0;box-shadow:0 8px 30px #163c2826}#confirmDialog{width:min(460px,calc(100vw - 32px));border:1px solid var(--line);border-radius:14px;padding:24px}#confirmDialog::backdrop{background:#14251d66}#confirmText{margin:16px 0;white-space:pre-wrap}.confirm-actions{display:flex;justify-content:flex-end;gap:10px}
 .quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px}.quota-window{border:1px solid var(--line);border-radius:10px;padding:18px}.quota-window h3{margin:0;font-size:14px}.quota-value{font-size:28px;font-weight:650;color:var(--green);margin:12px 0 7px}.quota-window progress{appearance:none;-webkit-appearance:none;border:0;border-radius:6px;width:100%;height:10px;accent-color:var(--green)}.quota-window progress::-webkit-progress-bar{background:#edf1eb;border-radius:6px}.quota-window progress::-webkit-progress-value{background:var(--green);border-radius:6px}.quota-window.low progress{accent-color:var(--orange)}.quota-window.low progress::-webkit-progress-value{background:var(--orange)}.quota-window.low .quota-value{color:#a56427}.quota-window.unknown .quota-value{color:var(--muted)}.quota-heading{display:flex;align-items:center;gap:12px;margin:22px 0 8px}.quota-heading h3{margin:0;font-size:16px}#usageState.error{color:var(--danger)}#usageRefresh{margin-top:18px}@media(max-width:600px){.quota-grid{grid-template-columns:1fr}}
+.rotation-toggle{display:flex;align-items:center;gap:9px;margin-bottom:16px}.rotation-toggle input{display:inline;width:auto;margin:0}.rotation-detail{font-size:11px;font-weight:400;color:var(--muted);margin-top:6px;white-space:normal}
 </style>
 </head>
 <body>
@@ -62,10 +63,18 @@ dialog.request-detail{width:min(860px,90vw);max-height:85vh;padding:28px;border:
       <div class="current-account"><div class="avatar" aria-hidden="true">C</div><div><div class="account-label">当前登录账号</div><div class="account-name" id="current">—</div><div id="summary" class="badge neutral">等待连接</div></div></div>
       <div class="concurrency"><form id="limitForm" class="inline-form"><label for="limit">并发上限 <input id="limit" type="number" min="1" step="1" required></label><button class="primary save-button">保存设置</button></form><p class="hint">保存后立即生效。降低上限不会中断已有请求；限流时实际并发可能降低。</p></div>
     </section>
+    <section class="card accounts-card" aria-labelledby="rotationTitle">
+      <div class="card-heading"><div><h2 id="rotationTitle">自动切换账号</h2><p class="subtitle">剩余额度 ≤2% 时换号，备用账号需 >5%</p></div><span id="rotationState" class="badge neutral">未启用</span></div>
+      <div class="form-body"><form id="rotationForm"><label class="rotation-toggle"><input id="rotationEnabled" type="checkbox">启用自动切换</label>
+        <label for="rotationPriority">备用账号优先级<input id="rotationPriority" placeholder="例如 pro-2, plus-1, plus-2"></label>
+        <p class="hint">账号名用逗号分隔；未列出的账号排在后面。正常使用每 10 分钟检查，剩余 2%–10% 时每 2 分钟检查，空闲时不主动查询。</p><button>保存自动切换设置</button></form>
+        <p id="rotationMessage" class="hint"></p><details><summary>最近自动切换记录</summary><ul id="rotationEvents" class="steps"></ul></details>
+      </div>
+    </section>
     <section class="card accounts-card" aria-labelledby="accountsTitle">
       <div class="card-heading"><div><h2 id="accountsTitle">账号列表<span class="count" id="accountCount"></span></h2><p class="subtitle">集中管理账号与登录状态</p></div><span class="summary-text" id="updated">每 5 秒自动刷新</span></div>
       <div class="table-wrap"><table><thead><tr><th scope="col">账号名称</th><th scope="col">登录账号</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody id="profiles"></tbody></table></div>
-      <p class="table-note">账号信息已脱敏。切换前需清空运行中、排队及结果未知的请求；当前账号不能删除。</p>
+      <p class="table-note">账号信息已脱敏。切换时等待在途请求结束，排队请求继续保留；结果未知时暂停切换。当前账号不能删除。</p>
     </section>
     <div class="add-grid">
       <section class="card" aria-labelledby="linkTitle"><div class="card-heading"><div><h2 id="linkTitle"><span class="section-icon" aria-hidden="true">↗</span>通过登录添加</h2><p class="subtitle">在浏览器中完成 ChatGPT 账号授权</p></div></div><div class="form-body">
@@ -126,7 +135,7 @@ function confirmAction(text) {
 }
 async function api(path, body) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), path === 'login-callback' ? 90000 : 20000);
+  const timeout = setTimeout(() => controller.abort(), ['switch', 'add', 'login-callback', 'rotation'].includes(path) ? 150000 : 20000);
   try {
     const response = await fetch('/admin/api/' + path, {
       method: body ? 'POST' : 'GET', signal: controller.signal,
@@ -172,8 +181,8 @@ async function load() {
   el('login').hidden = true;
   el('console').hidden = false;
   el('logout').hidden = false;
-  const states = q.paused
-    ? '已暂停'
+  const states = q.paused ? '已暂停' : q.switching ? '正在切换账号' : q.rotation_hold
+    ? '等待可用账号'
     : q.account_unavailable
       ? '账号认证或额度不可用'
       : q.cooldown_seconds
@@ -182,6 +191,20 @@ async function load() {
   el('summary').textContent = states;
   el('summary').className =
     'badge' + (q.account_unavailable ? ' error' : q.paused || q.cooldown_seconds ? ' warning' : '');
+  const rotation = data.rotation || {}, settings = rotation.settings || {};
+  if (!el('rotationForm').contains(document.activeElement)) {
+    el('rotationEnabled').checked = !!settings.enabled;
+    el('rotationPriority').value = (settings.priority || []).join(', ');
+  }
+  const phases = {disabled:'未启用',idle:'等待请求',monitoring:'监测中',checking:'检查备用账号',draining:'等待在途请求结束',switching:'切换账号中',waiting:'等待可用账号',error:'需要处理'};
+  el('rotationState').textContent = settings.enabled ? (phases[rotation.phase] || '监测中') : '未启用';
+  el('rotationState').className = 'badge' + (!settings.enabled ? ' neutral' : ['waiting','error'].includes(rotation.phase) ? ' warning' : '');
+  el('rotationMessage').textContent = [rotation.message, rotation.candidate ? '目标账号：' + rotation.candidate : '',
+    settings.enabled && rotation.next_check_at ? '下次最早检查：' + new Date(rotation.next_check_at * 1000).toLocaleString('zh-CN') : ''].filter(Boolean).join(' · ');
+  const events = (rotation.events || []).slice(0, 10).map(item => { const li = document.createElement('li');
+    li.textContent = new Date(item.at * 1000).toLocaleString('zh-CN') + ' · ' + item.from + ' → ' + item.to + ' · ' + (item.ok ? '已切换' : '失败') + ' · ' + (item.error || item.reason); return li; });
+  if (!events.length) { const li = document.createElement('li'); li.textContent = '暂无自动切换记录'; events.push(li); }
+  el('rotationEvents').replaceChildren(...events);
   el('current').textContent = data.current || '未知';
   for (const key of ['running', 'pending', 'quarantined']) el(key).textContent = q[key];
   el('unknownMetric').classList.toggle('attention', q.quarantined > 0);
@@ -207,6 +230,14 @@ async function load() {
         badge.className = 'badge' + (p.active ? '' : p.valid ? ' neutral' : ' error');
         badge.textContent = text;
         cell.append(badge);
+        const cached = rotation.profiles?.[p.name];
+        const detail = document.createElement('div'); detail.className = 'rotation-detail';
+        const main = cached?.quota?.limits?.find(limit => limit.name === 'Codex');
+        const values = (main?.windows || []).map(window => window.remaining_percent).filter(value => typeof value === 'number');
+        const left = main?.limit_reached || main?.allowed === false ? 0 : values.length ? Math.min(...values) : null;
+        detail.textContent = cached?.error || (left === null ? '额度未查询' : '最低剩余 ' + Number(left.toFixed(1)) + '%' + (left <= 2 ? ' · 等待重置' : ''));
+        if (cached?.quota?.fetched_at) detail.textContent += ' · ' + new Date(cached.quota.fetched_at * 1000).toLocaleTimeString('zh-CN');
+        cell.append(detail);
       } else {
         cell.textContent = text;
       }
@@ -460,6 +491,11 @@ el('loginForm').onsubmit = async (event) => {
   }
 };
 el('logout').onclick = logout;
+el('rotationForm').onsubmit = (event) => {
+  event.preventDefault();
+  const priority = el('rotationPriority').value.split(/[,，]/).map(name => name.trim()).filter(Boolean);
+  mutate('rotation', {enabled:el('rotationEnabled').checked, priority:[...new Set(priority)]});
+};
 el('limitForm').onsubmit = (event) => {
   event.preventDefault();
   mutate('concurrency', { limit: Number(el('limit').value) });

@@ -75,10 +75,7 @@ if [[ "${CODEX_WORKER_QUEUE:-0}" == 1 ]]; then
 fi
 CODEX_WORKER_API_KEY="$token" codex-responses-api-proxy "${queue_args[@]}" --port 8787 --app-server-socket "$socket" &
 pids+=("$!")
-if [[ "${CODEX_WORKER_AUTO_SWITCH:-0}" == 1 && "${CODEX_WORKER_QUEUE:-0}" == 1 ]]; then
-    /usr/local/bin/account-switcher.sh &
-    pids+=("$!")
-fi
+# Automatic account rotation is managed in-process through the admin console.
 # Gate readiness on the proxy listener without requiring an upstream model call.
 for ((i=0; i<90; i++)); do
     if curl --noproxy '*' --silent --output /dev/null http://127.0.0.1:8787/; then

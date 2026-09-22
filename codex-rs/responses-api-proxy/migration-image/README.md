@@ -91,15 +91,18 @@ The page supports auth.json import, browser login links with pasted callbacks,
 account deletion, active account selection, and live concurrency changes.
 Profiles are stored in `/data/accounts` inside the persistent Docker volume.
 Adding a profile does not activate it; select it explicitly in the page.
-Switching requires an idle queue, then app-server reloads its authentication
-without a restart. Concurrency changes take effect immediately and persist.
+Switching drains active requests while retaining bounded queued work, then
+confirms app-server authentication and account identity without a restart. Concurrency changes take effect immediately and persist.
 The default selectable capacity is 32; changing `CODEX_SESSION_POOL_SIZE` or
 other container environment settings requires `./migrate.sh start` to recreate.
 
-To enable automatic switching after a confirmed quota exhaustion, also set
-`CODEX_WORKER_AUTO_SWITCH=1`. The worker selects the first profile (sorted by
-name) different from the active profile. Leave this disabled if account
-selection requires manual approval.
+Enable **自动切换账号** in the admin page and set the backup-profile priority.
+The proxy rotates at <=2% remaining into a confirmed candidate above 5%. Active
+quota checks run on demand every 10 minutes normally or 2 minutes near depletion;
+standby accounts are queried only when needed. Config, quota cache and switch
+history persist beside auth.json. The legacy CODEX_WORKER_AUTO_SWITCH shell
+switcher is no longer launched; the in-process manager owns both manual and
+automatic activation, acknowledgement and rollback.
 
 ### Conversation queue
 
