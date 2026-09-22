@@ -130,6 +130,9 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
                 .insert_header("x-codex-turn-state", "upstream-next-token")
                 .insert_header("set-cookie", "must-not-leak")
                 .insert_header("retry-after", "120")
+                .insert_header("x-codex-primary-used-percent", "98")
+                .insert_header("x-codex-primary-window-minutes", "300")
+                .insert_header("x-codex-primary-reset-at", "1791000000")
                 .set_body_raw(upstream_body.as_bytes().to_vec(), "text/event-stream"),
         )
         .expect(1)
@@ -225,6 +228,16 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
         "x-codex-queue-principal",
         "x-forwarded-for",
         "x-hop-only",
+        "cdn-loop",
+        "cf-access-client-secret",
+        "cf-ew-via",
+        "true-client-ip",
+        "fastly-client-ip",
+        "x-envoy-external-address",
+        "origin",
+        "referer",
+        "sec-fetch-site",
+        "sec-ch-ua-platform",
     ] {
         incoming_headers.insert(name.into(), "client-must-not-leak".into());
     }
@@ -252,6 +265,15 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
                 "upstream-next-token".to_string()
             ),
             ("retry-after".to_string(), "120".to_string()),
+            ("x-codex-primary-used-percent".to_string(), "98".to_string()),
+            (
+                "x-codex-primary-window-minutes".to_string(),
+                "300".to_string()
+            ),
+            (
+                "x-codex-primary-reset-at".to_string(),
+                "1791000000".to_string()
+            ),
             ("content-type".to_string(), "text/event-stream".to_string()),
         ]))
     );

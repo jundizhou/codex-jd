@@ -13,6 +13,11 @@ fn preserves_application_headers_and_excludes_caller_transport_state() {
         ("Content-Type", "application/json"),
         ("X-Codex-Turn-Metadata", "{}"),
         ("Session_Id", "client-session"),
+        ("X-Stainless-Lang", "python"),
+        ("Traceparent", "application-trace"),
+        ("Tracestate", "vendor=value"),
+        ("Baggage", "request-kind=smoke"),
+        ("X-Request-ID", "application-request"),
     ];
     let supplied = preserved.into_iter().chain([
         ("Authorization", "Bearer client"),
@@ -36,6 +41,23 @@ fn preserves_application_headers_and_excludes_caller_transport_state() {
         ("X-Hop-Only", "private"),
         ("Connection", "keep-alive, X-Hop-Only"),
         ("Keep-Alive", "timeout=60"),
+        ("CDN-Loop", "cloudflare; loops=1"),
+        ("CF-Ray", "edge-ray"),
+        ("CF-EW-Via", "15"),
+        ("CF-Worker", "ingress.example"),
+        ("CF-Connecting-IPv6", "2001:db8::1"),
+        ("CF-Pseudo-IPv4", "240.0.0.1"),
+        ("CF-Access-Jwt-Assertion", "ingress-jwt"),
+        ("CF-Access-Client-Id", "ingress-id"),
+        ("CF-Access-Client-Secret", "ingress-secret"),
+        ("True-Client-IP", "203.0.113.1"),
+        ("Fastly-Client-IP", "203.0.113.1"),
+        ("X-Envoy-External-Address", "203.0.113.1"),
+        ("Origin", "https://ingress.example"),
+        ("Referer", "https://ingress.example/private"),
+        ("Sec-Fetch-Site", "same-origin"),
+        ("Sec-CH-UA", "browser"),
+        ("Sec-CH-UA-Platform", "platform"),
     ]);
     let expected = preserved
         .into_iter()

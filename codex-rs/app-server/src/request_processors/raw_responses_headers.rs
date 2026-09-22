@@ -27,22 +27,32 @@ pub(super) fn request_headers(
 }
 
 pub(super) fn response_headers(headers: &HeaderMap) -> HashMap<String, String> {
-    ["x-codex-turn-state", "retry-after", "content-type"]
-        .into_iter()
-        .filter_map(|name| {
-            let values: Vec<_> = headers.get_all(name).iter().collect();
-            if values.len() != 1 {
-                return None;
-            }
-            let value = values[0].to_str().ok()?;
-            let limit = if name == "x-codex-turn-state" {
-                8192
-            } else {
-                1024
-            };
-            (value.len() <= limit).then(|| (name.to_string(), value.to_string()))
-        })
-        .collect()
+    [
+        "x-codex-turn-state",
+        "retry-after",
+        "content-type",
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-at",
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-at",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let values: Vec<_> = headers.get_all(name).iter().collect();
+        if values.len() != 1 {
+            return None;
+        }
+        let value = values[0].to_str().ok()?;
+        let limit = if name == "x-codex-turn-state" {
+            8192
+        } else {
+            1024
+        };
+        (value.len() <= limit).then(|| (name.to_string(), value.to_string()))
+    })
+    .collect()
 }
 
 #[cfg(test)]

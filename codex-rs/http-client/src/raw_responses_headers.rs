@@ -81,8 +81,19 @@ pub fn raw_responses_headers<'a>(
                     | "forwarded"
                     | "via"
                     | "x-real-ip"
+                    | "cdn-loop"
+                    | "true-client-ip"
+                    | "fastly-client-ip"
+                    | "x-envoy-external-address"
+                    | "origin"
+                    | "referer"
             ) || name.starts_with("x-forwarded-")
                 || name.starts_with("x-codex-queue-")
+                // Edge credentials/routing and browser context belong to the ingress,
+                // not the provider request. Keep SDK and application tracing headers.
+                || name.starts_with("cf-")
+                || name.starts_with("sec-fetch-")
+                || name.starts_with("sec-ch-ua")
         })
         .cloned()
         .collect::<Vec<_>>();

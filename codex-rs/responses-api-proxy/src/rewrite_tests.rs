@@ -90,6 +90,7 @@ fn replaces_workspace_and_identity_in_both_carriers_and_survives_restart() {
     }});
     assert_eq!(actual, expected);
     let mut expected_body = body;
+    expected_body["store"] = false.into();
     expected_body["client_metadata"]["session_id"] = "server-thread".into();
     expected_body["client_metadata"]["x-codex-turn-metadata"] = actual.to_string().into();
     assert_eq!(rewritten.body, expected_body);
@@ -111,7 +112,7 @@ fn replaces_workspace_and_identity_in_both_carriers_and_survives_restart() {
 #[test]
 fn preserves_shape_multiple_workspaces_nulls_and_header_only_body() {
     let (_directory, profiles) = profiles();
-    let body = br#"{"model":"mock","input":[],"unknown":[null,true]}"#;
+    let body = br#"{"model":"mock","input":[],"store":false,"unknown":[null,true]}"#;
     let metadata = json!({"session_id": "client", "turn_id": null, "workspaces": {
         "C:\\repo": {"has_changes": null, "other": 7}, "/other": {}
     }});
@@ -237,6 +238,36 @@ fn header_affinity_matches_body_affinity_without_modifying_input() {
     let direct = tiny_http::Header::from_bytes("session_id", "client-session").unwrap();
     assert_eq!(key_for_http_request(b"{}", &[direct]).unwrap(), from_header);
     assert!(key_for_http_request(b"{}", &[header.clone(), header]).is_err());
+}
+
+#[test]
+fn defaults_omitted_storage_without_changing_explicit_values_or_sdk_parameters() {
+    let base = json!({
+        "model": "mock", "input": [{"role":"user", "content":"hello"}],
+        "stream": true, "max_output_tokens": 1024,
+        "reasoning": {"effort":"low"}, "text": {"verbosity":"low"}
+    });
+    for supplied_store in [
+        None,
+        Some(json!(false)),
+        Some(json!(true)),
+        Some(Value::Null),
+    ] {
+        let mut supplied = base.clone();
+        if let Some(value) = &supplied_store {
+            supplied["store"] = value.clone();
+        }
+        let rewritten = rewrite_request(
+            &serde_json::to_vec(&supplied).unwrap(),
+            HashMap::new(),
+            &identity("server"),
+            /*profiles*/ None,
+        )
+        .unwrap();
+        let mut expected = base.clone();
+        expected["store"] = supplied_store.unwrap_or(json!(false));
+        assert_eq!(rewritten.body, expected);
+    }
 }
 
 #[test]

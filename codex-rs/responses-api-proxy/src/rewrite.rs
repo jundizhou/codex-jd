@@ -1,4 +1,4 @@
-//! Replace existing metadata values without moving fields between headers and JSON.
+//! Apply the worker's storage default and replace existing identity metadata in place.
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -158,7 +158,12 @@ pub(crate) fn rewrite_request(
     profiles: Option<&Profiles>,
 ) -> Result<RewrittenRequest> {
     let mut body: Value = serde_json::from_slice(body)?;
-    ensure!(body.is_object(), "request must be an object");
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("request must be an object"))?;
+    // The Codex backend requires storage to be disabled. Only fill an omitted
+    // value; explicit values and all other inference parameters stay opaque.
+    object.entry("store").or_insert(Value::Bool(false));
     let mut metadata = Vec::new();
     if let Some(flat) = body.get("client_metadata") {
         ensure!(flat.is_object(), "client_metadata must be an object");

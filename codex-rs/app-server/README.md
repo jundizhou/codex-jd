@@ -614,7 +614,10 @@ and workspace metadata is preserved, including its header/body location. Absent
 metadata fields are not synthesized; explicit nulls are preserved.
 The adapter returns `rawResponseBody`, `rawResponseStatus`, and
 `rawResponseHeaders`; the response allowlist contains `x-codex-turn-state`
-(at most 8192 bytes), `retry-after` and `content-type` (at most 1024 bytes each).
+(at most 8192 bytes), `retry-after`, `content-type`, and the six Codex
+primary/secondary quota headers (`used-percent`, `window-minutes`, `reset-at`;
+at most 1024 bytes each). The proxy observes quota headers internally without
+adding them to its downstream HTTP response.
 Duplicate, oversized and invalid text values are omitted; other headers,
 including credentials and cookies, are never forwarded. Retry-After is preserved
 verbatim for the caller to interpret. Tokens are not shared or cached across requests. Normal
