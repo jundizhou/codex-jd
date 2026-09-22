@@ -147,6 +147,7 @@ impl Drop for Lease {
 
 #[derive(Clone)]
 pub(crate) struct Dispatch {
+    pub(super) account_epoch: u64,
     pub(super) scheduler: Arc<Scheduler>,
     pub(super) started: Arc<AtomicBool>,
     pub(super) attempt: Arc<Attempt>,
@@ -213,10 +214,16 @@ impl Dispatch {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.account_epoch != state.account_epoch {
+            return;
+        }
         let maximum = state.max_running;
         state
             .throttle
             .observe(status, headers, Instant::now(), maximum);
+        if state.rotation_enabled && state.throttle.blocked {
+            state.rotation_hold = true;
+        }
         let State {
             journal,
             throttle,

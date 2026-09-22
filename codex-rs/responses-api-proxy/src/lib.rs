@@ -27,6 +27,7 @@ mod affinity;
 mod app_server_reader;
 mod args;
 pub use args::Args;
+mod account_switch;
 mod admin_accounts;
 mod admin_login;
 mod admin_usage;
@@ -256,6 +257,23 @@ pub fn run_main(args: Args) -> Result<()> {
             }
             if request.url() == "/readyz" && !forward_config.identity_client.is_available() {
                 queue_http::error(request, scheduler::Rejection::IdentityUnavailable);
+                continue;
+            }
+            if request.method() == &Method::Post && request.url().starts_with("/admin/") {
+                let config = Arc::clone(&forward_config);
+                std::thread::spawn(move || {
+                    if let Some(queue) = &config.queue {
+                        queue_http::control(
+                            queue,
+                            &config.identity_client,
+                            request,
+                            &config.account_label,
+                            config.profile_dir.as_deref(),
+                            &config.auth_path,
+                            config.admin_capacity,
+                        );
+                    }
+                });
                 continue;
             }
             let Some(request) = queue_http::control(

@@ -108,6 +108,9 @@ pub(crate) struct AppServerIdentityClient {
 }
 
 impl AppServerIdentityClient {
+    pub(crate) fn socket(&self) -> &Path {
+        &self.socket
+    }
     pub(crate) fn recover_conversation(&self, key: String) -> Result<()> {
         let (response, receiver) = mpsc::channel();
         self.command_tx
@@ -554,7 +557,7 @@ fn run_worker(
                                 create_pool_threads(&mut replacement, *size).await?;
                             }
                             IdentityMode::Durable(conversations) => {
-                                conversations.reset_account()?;
+                                conversations.reset_account(&mut stream).await?;
                             }
                         }
                         stream = replacement;

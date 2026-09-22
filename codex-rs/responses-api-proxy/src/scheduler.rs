@@ -24,9 +24,12 @@ mod admission;
 mod lifecycle;
 #[path = "scheduler_recovery.rs"]
 mod recovery;
+#[path = "scheduler_switch.rs"]
+mod switching;
 use lifecycle::Attempt;
 pub(crate) use lifecycle::Dispatch;
 pub(crate) use lifecycle::Lease;
+pub(crate) use switching::Activation;
 
 pub(crate) const MAX_PENDING: usize = 24;
 pub(crate) const MAX_QUEUE_WAIT: Duration = Duration::from_secs(120);
@@ -77,6 +80,11 @@ struct State {
     // Persisted request IDs and conversation digests still consuming upstream capacity.
     quarantined: HashMap<String, Option<String>>,
     paused: bool,
+    switching: bool,
+    rotation_enabled: bool,
+    rotation_hold: bool,
+    account_epoch: u64,
+    traffic_version: u64,
     journal: Journal,
     throttle: Throttle,
     attempts: HashMap<String, Arc<Attempt>>,
@@ -174,6 +182,8 @@ impl State {
     fn selected(&self, now: Instant, config: &Config) -> Option<&str> {
         if self.uncertain
             || self.paused
+            || self.switching
+            || self.rotation_hold
             || self.throttle.blocked
             || self.throttle.until.is_some_and(|until| now < until)
             || self.dispatching.is_some()
@@ -321,6 +331,7 @@ impl Scheduler {
             "automatic_recovery": self.config.automatic_recovery, "recovery": s.journal.recovery_status(),
             "effective_max_running":s.throttle.limit, "paused":s.paused, "account_unavailable":s.throttle.blocked,
             "account_unavailable_reason":s.throttle.blocked_reason,
+            "switching":s.switching,"rotation_hold":s.rotation_hold,"traffic_version":s.traffic_version,"account_epoch":s.account_epoch,
             "cooldown_seconds":s.throttle.until.map(|until| {
                 let left = until.saturating_duration_since(Instant::now());
                 left.as_secs() + u64::from(left.subsec_nanos() != 0)
@@ -348,3 +359,7 @@ impl Drop for Admission {
 #[cfg(test)]
 #[path = "scheduler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scheduler_switch_tests.rs"]
+mod switch_tests;

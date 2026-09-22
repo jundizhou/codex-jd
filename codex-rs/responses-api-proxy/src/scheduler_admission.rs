@@ -15,6 +15,7 @@ impl Scheduler {
             return Err(Rejection::Full);
         }
         state.inbound += 1;
+        state.traffic_version = state.traffic_version.wrapping_add(1);
         state.bytes += bytes;
         Ok(Admission {
             scheduler: Arc::clone(self),
@@ -121,7 +122,9 @@ impl Scheduler {
             let now = Instant::now();
             let rejection = if state.cancelled.contains_key(&cancel_key) {
                 Some(Rejection::Cancelled)
-            } else if state.paused || state.throttle.blocked {
+            } else if state.paused
+                || (state.throttle.blocked && !state.rotation_hold && !state.switching)
+            {
                 Some(Rejection::Paused)
             } else if state
                 .throttle
@@ -189,6 +192,7 @@ impl Scheduler {
                     evidence: pending.evidence,
                     dispatch: Dispatch {
                         scheduler: Arc::clone(self),
+                        account_epoch: state.account_epoch,
                         started: Arc::new(AtomicBool::new(false)),
                         attempt,
                         fingerprint: pending.fingerprint,

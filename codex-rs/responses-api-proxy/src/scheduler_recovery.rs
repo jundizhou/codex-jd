@@ -6,6 +6,7 @@ use crate::queue_store::now;
 impl State {
     fn recovery_allowed(&self) -> bool {
         !self.uncertain
+            && !self.switching
             && !self.paused
             && !self.throttle.blocked
             && self

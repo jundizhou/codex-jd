@@ -50,6 +50,11 @@ impl Continuation {
         let mut calls = HashSet::new();
         if let Some(items) = body["input"].as_array() {
             for item in items {
+                if !item["encrypted_content"].is_null()
+                    || !item["encrypted_function_args"].is_null()
+                {
+                    return Self::RequiresIdentity;
+                }
                 match item["type"].as_str() {
                     Some("function_call" | "custom_tool_call") => {
                         if let Some(id) = item["call_id"].as_str() {
@@ -132,9 +137,20 @@ fn account(path: &Path) -> Result<String> {
 }
 
 impl Conversations {
-    pub(crate) fn reset_account(&mut self) -> Result<()> {
+    pub(crate) async fn reset_account<S>(&mut self, stream: &mut WebSocketStream<S>) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        ensure!(
+            self.loaded.values().all(Option::is_some),
+            "仍有线程正在使用，不能重载账号"
+        );
+        while let Some(thread) = self.loaded.keys().next().cloned() {
+            send_and_wait_for_response(stream, "thread/unsubscribe", json!({"threadId":thread}))
+                .await?;
+            self.loaded.remove(&thread);
+        }
         self.account = Some(account(&self.auth_path)?);
-        self.loaded.clear();
         self.save()
     }
 

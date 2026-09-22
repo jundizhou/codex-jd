@@ -1,7 +1,7 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-fn config() -> Config {
+pub(super) fn config() -> Config {
     Config {
         automatic_recovery: false,
         max_running: 2,
@@ -14,7 +14,7 @@ fn config() -> Config {
     }
 }
 
-fn pending(id: &str, tenant: &str, conversation: &str) -> Pending {
+pub(super) fn pending(id: &str, tenant: &str, conversation: &str) -> Pending {
     Pending {
         id: id.into(),
         key: Key(tenant.into(), conversation.into()),
@@ -469,7 +469,6 @@ fn confirmed_quota_exhaustion_disables_dispatch_until_explicit_recovery() {
 fn admin_limit_applies_without_cancelling_running_work() -> anyhow::Result<()> {
     let scheduler = Scheduler::new(config(), Journal::default());
     let lease = scheduler.acquire(pending("active", "user", "conversation"))?;
-    assert!(scheduler.switch_idle(|| Ok(())).is_err());
     scheduler.set_limit(1, || Ok(()))?;
     {
         let state = scheduler.state.lock().unwrap();

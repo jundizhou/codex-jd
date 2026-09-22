@@ -31,7 +31,7 @@ impl<'a> Store<'a> {
         }
     }
 
-    fn names(&self) -> anyhow::Result<Vec<String>> {
+    pub(crate) fn names(&self) -> anyhow::Result<Vec<String>> {
         if !self.root.exists() {
             return Ok(Vec::new());
         }
@@ -52,7 +52,7 @@ impl<'a> Store<'a> {
         Ok(names)
     }
 
-    fn profile(&self, name: &str) -> anyhow::Result<std::path::PathBuf> {
+    pub(crate) fn profile(&self, name: &str) -> anyhow::Result<std::path::PathBuf> {
         anyhow::ensure!(
             valid_name(name),
             "名称必须为 1–64 个英文字母、数字、短横线或下划线"
@@ -82,7 +82,7 @@ impl<'a> Store<'a> {
         }
     }
 
-    fn list(&self) -> anyhow::Result<Value> {
+    pub(crate) fn list(&self) -> anyhow::Result<Value> {
         let active = read_auth(self.auth).ok();
         let current = active.as_ref().map(login_label);
         let mut result = Vec::new();
@@ -165,7 +165,7 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
-    fn activate(&self, name: &str) -> anyhow::Result<()> {
+    pub(crate) fn activate(&self, name: &str) -> anyhow::Result<()> {
         let next = read_auth(&self.profile(name)?)?;
         let previous = match read_auth(self.auth) {
             Ok(previous) => previous,
@@ -210,7 +210,7 @@ pub(crate) fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
 }
 
-fn identity(value: &Value) -> String {
+pub(crate) fn identity(value: &Value) -> String {
     value
         .pointer("/tokens/account_id")
         .or_else(|| value.get("OPENAI_API_KEY"))
@@ -334,6 +334,11 @@ pub(crate) fn control(
     auth: &Path,
     capacity: usize,
 ) -> Option<Request> {
+    let _mutation = (req.method() == &Method::Post).then(|| {
+        crate::account_switch::LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     let store = Store::new(root, auth, capacity);
     if req.method() == &Method::Get && req.url() == "/admin/accounts" {
         let mut response = Response::from_string(include_str!("admin_accounts.html"));
@@ -350,16 +355,7 @@ pub(crate) fn control(
         && let Some(name) = req.url().strip_prefix("/admin/api/usage?profile=")
     {
         let name = name.to_owned();
-        let credentials = store
-            .profile(&name)
-            .and_then(|path| read_auth(&path))
-            .map(|saved| {
-                // The active file may contain fresher tokens than its stored profile.
-                match read_auth(auth) {
-                    Ok(active) if identity(&active) == identity(&saved) => active,
-                    _ => saved,
-                }
-            });
+        let credentials = crate::account_switch::credentials(&store, auth, &name);
         crate::admin_usage::respond(req, name, credentials);
         return None;
     }
@@ -393,22 +389,25 @@ pub(crate) fn control(
         match req.url() {
             "/admin/api/add" => {
                 return store.save_login(name, &body["auth"], |value| {
-                    queue.switch_idle(|| write_private(auth, value))?;
-                    identity_client.reload()
+                    crate::account_switch::apply(queue, identity_client, auth, || {
+                        write_private(auth, value)
+                    })
                 });
             }
             "/admin/api/delete" => store.delete(name)?,
             "/admin/api/switch" => {
-                queue.switch_idle(|| store.activate(name))?;
-                identity_client.reload()?;
+                crate::account_switch::apply(queue, identity_client, auth, || {
+                    store.activate(name)
+                })?;
             }
             "/admin/api/login-start" => return crate::admin_login::start(root, name),
             "/admin/api/login-callback" => {
                 let url = body["url"].as_str().context("缺少回调链接")?;
                 return crate::admin_login::complete(root, name, url, |value| {
                     store.save_login(name, value, |value| {
-                        queue.switch_idle(|| write_private(auth, value))?;
-                        identity_client.reload()
+                        crate::account_switch::apply(queue, identity_client, auth, || {
+                            write_private(auth, value)
+                        })
                     })
                 });
             }

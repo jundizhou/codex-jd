@@ -79,6 +79,8 @@ pub(crate) fn control(
     if req.method() == &Method::Get && req.url() == "/readyz" {
         let status = queue.status();
         let ready = status["paused"] == false
+            && status["switching"] == false
+            && status["rotation_hold"] == false
             && status["worker_fault"] == false
             && status["quarantined"].as_u64() < status["effective_max_running"].as_u64()
             && status["account_unavailable"] == false

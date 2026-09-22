@@ -86,7 +86,7 @@ impl Throttle {
     }
 }
 
-fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+pub(crate) fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
     let value = value.trim();
     if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
         // An unrepresentably long cooldown requires manual recovery.

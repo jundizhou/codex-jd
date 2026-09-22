@@ -12,6 +12,14 @@ fn full_history_preserves_tool_pairs_but_dangling_dependencies_require_identity(
             Continuation::SelfContained,
         ),
         (json!([output.clone()]), Continuation::RequiresIdentity),
+        (
+            json!([{"type":"reasoning","encrypted_content":"account-bound"}]),
+            Continuation::RequiresIdentity,
+        ),
+        (
+            json!([{"type":"function_call","encrypted_function_args":"account-bound"}]),
+            Continuation::RequiresIdentity,
+        ),
         (json!([output, call]), Continuation::RequiresIdentity),
         (
             json!([{"type":"item_reference", "id":"opaque"}]),
