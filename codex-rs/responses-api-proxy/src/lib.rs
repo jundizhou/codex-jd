@@ -33,6 +33,7 @@ mod admin_accounts;
 mod admin_login;
 mod admin_usage;
 mod auth;
+mod continuation_index;
 mod conversations;
 mod dump;
 mod identity;
