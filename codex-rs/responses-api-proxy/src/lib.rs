@@ -33,6 +33,7 @@ mod auth;
 mod conversations;
 mod dump;
 mod identity;
+mod metadata_profiles;
 mod models;
 mod monitored_request;
 mod queue_http;
@@ -45,14 +46,13 @@ mod rewrite;
 mod scheduler;
 mod session_pool;
 mod stream_http;
-use affinity::key_for_request;
+use affinity::key_for_http_request;
 use app_server_reader::AppServerIdentityClient;
 use app_server_reader::IdentityMode;
 use app_server_reader::resolve_socket_arg;
 use dump::ExchangeDumper;
 use identity::SessionIdentity;
-use rewrite::rewrite_body;
-use rewrite::rewrite_header;
+use rewrite::rewrite_request;
 use session_pool::SessionPool;
 
 #[derive(Serialize)]
@@ -62,6 +62,7 @@ struct ServerInfo {
 }
 
 struct ForwardConfig {
+    metadata_profiles: Option<metadata_profiles::Profiles>,
     identity_client: Arc<AppServerIdentityClient>,
     worker_api_key: Option<String>,
     queue: Option<Arc<scheduler::Scheduler>>,
@@ -197,7 +198,12 @@ pub fn run_main(args: Args) -> Result<()> {
         queue.start_recovery(&identity_client)?;
     }
 
+    let metadata_profiles = std::env::var_os("CODEX_METADATA_PROFILES")
+        .map(|path| metadata_profiles::Profiles::open(Path::new(&path)))
+        .transpose()
+        .context("loading persistent metadata profiles")?;
     let forward_config = Arc::new(ForwardConfig {
+        metadata_profiles,
         identity_client,
         worker_api_key,
         queue,
@@ -437,7 +443,13 @@ fn forward_request(
     }
     req.as_reader().read_to_end(&mut body)?;
     req.capture_body(&body);
-    let affinity_key = key_for_request(&body);
+    let affinity_key = match key_for_http_request(&body, req.headers()) {
+        Ok(key) => key,
+        Err(error) => {
+            req.respond(Response::new_empty(StatusCode(400)))?;
+            return Err(error);
+        }
+    };
     let session_pool = session_pool.context("nonqueue session pool missing")?;
     let identity = session_pool.acquire(affinity_key.as_deref());
     let result =
@@ -482,13 +494,6 @@ fn forward_request_with_identity(
         effective_identity.thread_id,
         body.len()
     );
-    let rewritten = match rewrite_body(&body, &effective_identity) {
-        Ok(rewritten) => rewritten,
-        Err(error) => {
-            req.respond(Response::new_empty(StatusCode(400)))?;
-            return Err(error.context("rewriting request identity metadata"));
-        }
-    };
     let exchange_dump = dump_dir.and_then(|dump_dir| {
         dump_dir
             .dump_request(&method, &url_path, req.headers(), &body)
@@ -498,7 +503,6 @@ fn forward_request_with_identity(
             })
             .ok()
     });
-    let request_value: Value = serde_json::from_slice(&rewritten.body)?;
     let mut headers = std::collections::HashMap::new();
     for header in req.headers() {
         let name = header.field.as_str().to_ascii_lowercase().to_string();
@@ -519,10 +523,21 @@ fn forward_request_with_identity(
             anyhow::bail!("oversized or duplicate routing/tracing header");
         }
     }
-    for (name, value) in &mut headers {
-        *value = rewrite_header(name, value, &effective_identity)
-            .map_err(|error| anyhow::anyhow!("rewriting request header {name}: {error}"))?;
-    }
+    let rewritten = match rewrite_request(
+        &body,
+        headers,
+        &effective_identity,
+        config.metadata_profiles.as_ref(),
+    ) {
+        Ok(rewritten) => rewritten,
+        Err(error) => {
+            req.respond(
+                Response::from_string(format!("invalid metadata: {error}\n"))
+                    .with_status_code(StatusCode(400)),
+            )?;
+            return Err(error.context("rewriting request metadata"));
+        }
+    };
     let capture_path = std::env::var_os("CODEX_HTTP_CAPTURE_DIR")
         .filter(|_| {
             effective_identity.thread_id.len() <= 64
@@ -539,8 +554,8 @@ fn forward_request_with_identity(
     }
     let raw_result = config.identity_client.run_raw_response(
         &effective_identity.thread_id,
-        request_value,
-        headers,
+        rewritten.body,
+        rewritten.headers,
         lease.map(|lease| lease.dispatch.clone()),
     );
     if let Some(path) = &capture_path {
@@ -564,7 +579,7 @@ fn forward_request_with_identity(
         .get("content-type")
         .map(String::as_str)
         .unwrap_or_else(|| {
-            if status_code < 400 && body_contains_stream(&rewritten.body) {
+            if status_code < 400 && body_contains_stream(&body) {
                 "text/event-stream"
             } else {
                 "application/json"

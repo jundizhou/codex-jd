@@ -3,6 +3,48 @@
 use serde_json::Map;
 use serde_json::Value;
 
+pub(crate) fn key_for_http_request(
+    body: &[u8],
+    headers: &[tiny_http::Header],
+) -> anyhow::Result<Option<String>> {
+    let mut values = headers
+        .iter()
+        .filter(|header| header.field.equiv("x-codex-turn-metadata"));
+    let metadata = values.next().map(|header| header.value.as_str());
+    anyhow::ensure!(values.next().is_none(), "duplicate turn metadata header");
+    let header_key = metadata
+        .map(|metadata| -> anyhow::Result<Option<String>> {
+            anyhow::ensure!(metadata.len() <= 8192, "turn metadata header too large");
+            let object: Map<String, Value> = serde_json::from_str(metadata)?;
+            anyhow::ensure!(
+                !object.contains_key("x-codex-turn-metadata"),
+                "recursive turn metadata"
+            );
+            Ok(metadata_value(&object))
+        })
+        .transpose()?
+        .flatten();
+    let mut direct_key = None;
+    for name in ["session_id", "thread_id"] {
+        let mut values = headers.iter().filter(|header| header.field.equiv(name));
+        if let Some(header) = values.next() {
+            anyhow::ensure!(values.next().is_none(), "duplicate {name} header");
+            let value = header.value.as_str().trim();
+            anyhow::ensure!(
+                !value.is_empty() && value.len() <= 512,
+                "invalid {name} header"
+            );
+            direct_key.get_or_insert_with(|| format!("{name}:{value}"));
+        }
+    }
+    let key = key_for_request(body).or(header_key).or(direct_key);
+    anyhow::ensure!(
+        key.as_ref().is_none_or(|key| key.len() <= 512),
+        "conversation key too long"
+    );
+    Ok(key)
+}
+
 pub(crate) fn key_for_request(body: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let object = value.as_object()?;

@@ -74,6 +74,8 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
     Ok(())
 }
 
+// Transport identities are authoritative; caller-mapped turn/context/parent identities
+// are opaque and must remain consistent with the forwarded metadata header.
 fn rewrite_raw_responses_identity(
     mut request: Value,
     identity: &codex_core::ModelRequestIdentity,
@@ -97,15 +99,12 @@ fn rewrite_raw_responses_identity(
             "x-codex-installation-id" => Some(identity.installation_id.as_str()),
             "session_id" => Some(identity.session_id.as_str()),
             "thread_id" => Some(identity.thread_id.as_str()),
-            "x-codex-window-id" | "window_id" | "context_window_id" => {
-                Some(identity.window_id.as_str())
-            }
-            "root_turn_id" => identity.root_turn_id.as_deref(),
-            "parent_turn_id" => identity.parent_turn_id.as_deref(),
-            "turn_id" => identity.turn_id.as_deref(),
+            "x-codex-window-id" | "window_id" => Some(identity.window_id.as_str()),
             _ => None,
         };
-        if let Some(value) = value {
+        if let Some(value) = value
+            && !metadata[&key].is_null()
+        {
             metadata.insert(key, Value::String(value.to_string()));
         }
     }
@@ -130,13 +129,12 @@ fn rewrite_raw_responses_identity(
                 "installation_id" => Some(identity.installation_id.as_str()),
                 "session_id" => Some(identity.session_id.as_str()),
                 "thread_id" => Some(identity.thread_id.as_str()),
-                "window_id" | "context_window_id" => Some(identity.window_id.as_str()),
-                "root_turn_id" => identity.root_turn_id.as_deref(),
-                "parent_turn_id" => identity.parent_turn_id.as_deref(),
-                "turn_id" => identity.turn_id.as_deref(),
+                "window_id" => Some(identity.window_id.as_str()),
                 _ => None,
             };
-            if let Some(value) = value {
+            if let Some(value) = value
+                && !nested[&key].is_null()
+            {
                 nested.insert(key, Value::String(value.to_string()));
             }
         }

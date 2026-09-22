@@ -152,3 +152,29 @@ Only explicitly allowed binaries and entrypoint are sent to the Docker build;
 the export copies a fixed allowlist and never includes `.env` or data volumes.
 The image is based on Ubuntu 24.04. Building requires network access to the
 base image and Ubuntu package repositories; importing the bundle does not.
+
+### Persistent metadata profiles
+
+Set `CODEX_METADATA_PROFILES=/data/metadata-profiles.json` to replace workspace
+paths and existing Git metadata with one of five fixed profiles. Provision the
+file before starting the service:
+
+```json
+{"version":1,"profiles":[{"path":"/workspace/project","remote_url":"https://github.com/owner/project.git","commit":"<full Git commit hash>","has_changes":false}],"threads":{}}
+```
+
+The example shows one profile; supply exactly five. Use public repository URLs
+and commits collected from those repositories. Profiles describe outbound
+metadata; the proxy does not clone repositories or change execution paths.
+Keep this file on the data volume and do not edit profiles for active bindings.
+A stable hash of the durable server thread selects the profile. Workspace map
+entries are replaced one-for-one, with a stable suffix for each original path.
+Absent fields and nulls remain unchanged. Without this setting, workspace
+metadata is preserved while identity fields are still rewritten.
+
+The file also records hashed client thread aliases so parent references resolve
+to the same server identities after restart. It is locked by one proxy process,
+atomically replaced on changes, limited to 4 MiB and 4096 aliases. Unknown parent
+references fail before upstream dispatch rather than forwarding a client ID.
+Back up the profiles file together with the queue conversation index. Never
+replace an existing file with a fresh empty alias map during an upgrade.

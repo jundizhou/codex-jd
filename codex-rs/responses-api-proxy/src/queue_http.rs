@@ -189,7 +189,7 @@ pub(crate) fn pending(
         .map(Duration::from_millis)
         .unwrap_or(crate::scheduler::MAX_QUEUE_WAIT)
         .min(crate::scheduler::MAX_QUEUE_WAIT);
-    let affinity = crate::affinity::key_for_request(body);
+    let affinity = crate::affinity::key_for_http_request(body, req.headers())?;
     anyhow::ensure!(
         affinity.as_ref().is_none_or(|key| key.len() <= 512),
         "conversation key too long"

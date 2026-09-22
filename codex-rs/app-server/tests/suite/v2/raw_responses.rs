@@ -240,7 +240,7 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     );
     metadata.insert("session_id".to_string(), json!(identity.session_id));
     metadata.insert("thread_id".to_string(), json!(identity.thread_id));
-    for key in ["x-codex-window-id", "window_id", "context_window_id"] {
+    for key in ["x-codex-window-id", "window_id"] {
         metadata.insert(key.to_string(), json!(identity.window_id));
     }
     let mut nested: serde_json::Value =
@@ -249,7 +249,6 @@ async fn raw_turn_start_preserves_non_identity_request_fields() -> Result<()> {
     nested["session_id"] = json!(identity.session_id);
     nested["thread_id"] = json!(identity.thread_id);
     nested["window_id"] = json!(identity.window_id);
-    nested["context_window_id"] = json!(identity.window_id);
     metadata.insert(
         "x-codex-turn-metadata".to_string(),
         json!(serde_json::to_string(&nested)?),
@@ -330,5 +329,94 @@ async fn raw_rate_limit_preserves_retry_hint_and_never_retries() -> Result<()> {
             ]))
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_metadata_preserves_mapped_workspaces_and_turn_links_in_both_carriers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            responses::sse(vec![responses::ev_completed("metadata")]),
+            "text/event-stream",
+        ))
+        .expect(/*r*/ 2)
+        .mount(&server)
+        .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+    let identities: ThreadModelIdentityListResponse = app
+        .request(|request_id| ClientRequest::ThreadModelIdentityList {
+            request_id,
+            params: ThreadModelIdentityListParams::default(),
+        })
+        .await?;
+    let identity = identities
+        .data
+        .iter()
+        .find(|identity| identity.thread_id == thread.id.as_str())
+        .unwrap();
+    let metadata = json!({
+        "installation_id": identity.installation_id, "session_id": identity.session_id,
+        "thread_id": identity.thread_id, "window_id": identity.window_id,
+        "context_window_id": "context-mapped", "turn_id": "turn-mapped", "root_turn_id": "root-mapped",
+        "parent_turn_id": null, "parent_thread_id": "parent-mapped",
+        "workspaces": {"/workspace/project/worktrees/example": {
+            "associated_remote_urls": {"origin":"https://github.com/example/project.git"},
+            "latest_git_commit_hash":"1234567890123456789012345678901234567890", "has_changes": false
+        }}
+    }).to_string();
+    let mut expected = Vec::new();
+    for carrier in ["header", "header-and-body"] {
+        let mut body = json!({"model":"mock-model", "input":[], "stream":true});
+        if carrier == "header-and-body" {
+            body["client_metadata"] =
+                json!({"x-codex-turn-metadata":metadata, "installation_id":null});
+        }
+        let response: TurnStartResponse = app
+            .request(|request_id| ClientRequest::TurnStart {
+                request_id,
+                params: TurnStartParams {
+                    thread_id: thread.id.clone(),
+                    raw_responses: Some(body.clone()),
+                    raw_responses_headers: Some(HashMap::from([
+                        ("x-codex-turn-metadata".into(), metadata.clone()),
+                        ("x-codex-parent-thread-id".into(), "parent-mapped".into()),
+                    ])),
+                    ..Default::default()
+                },
+            })
+            .await?;
+        assert_eq!(response.raw_response_status, Some(200));
+        expected.push((body, metadata.clone(), "parent-mapped".to_owned()));
+    }
+    let actual = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/v1/responses")
+        .map(|request| {
+            Ok((
+                request.body_json::<serde_json::Value>()?,
+                request.headers["x-codex-turn-metadata"]
+                    .to_str()?
+                    .to_owned(),
+                request.headers["x-codex-parent-thread-id"]
+                    .to_str()?
+                    .to_owned(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(actual, expected);
     Ok(())
 }

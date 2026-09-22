@@ -598,10 +598,14 @@ Enable `capabilities.experimentalApi` during initialization. `thread/modelIdenti
 
 The experimental raw Responses adapter accepts `turn/start.rawResponses` and
 optional `rawResponsesHeaders`. The latter permits only `x-codex-turn-state`,
-`x-codex-inference-call-id`, `traceparent`, and `tracestate` (case-insensitive,
-at most four entries, 8192 bytes per value, no duplicate names or invalid HTTP
-values). A missing inference ID receives a fresh UUID for that request. Existing
-window identity metadata is aligned with the selected thread's window header.
+`x-codex-inference-call-id`, `traceparent`, `tracestate`, `x-codex-turn-metadata`,
+`x-codex-installation-id`, `x-codex-window-id`, and `x-codex-parent-thread-id`
+(case-insensitive, at most twelve entries, 8192 bytes per value, no duplicate names
+or invalid HTTP values). A missing inference ID receives a fresh UUID for that
+request. Existing non-null installation/session/thread/window fields in the body
+are aligned with the selected thread. Caller-mapped turn, context-window, parent,
+and workspace metadata is preserved, including its header/body location. Absent
+metadata fields are not synthesized; explicit nulls are preserved.
 The adapter returns `rawResponseBody`, `rawResponseStatus`, and
 `rawResponseHeaders`; the response allowlist contains `x-codex-turn-state`
 (at most 8192 bytes), `retry-after` and `content-type` (at most 1024 bytes each).
